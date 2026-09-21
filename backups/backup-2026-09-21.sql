@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict MOqcJ0xseabIIuYYdbF8Laigbb6rsjUwbmbwhI81memtK7aXkzicEccG2ifayHA
+\restrict y4lUZYmjvasd6AddwVpRh0PBN6nPBiK5LQHqmSLGOoYHrGdtc8GPw25HK9mdZ3C
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
@@ -175,7 +175,8 @@ COPY public.agenda_backups (id, user_id, data_referencia, dados, atualizado_em) 
 1	1c9718fc-9a24-41fe-8dd7-e863fa6844ce	2026-09-05	{"gastos": [], "demandas": [], "financas": [], "geradoEm": "2026-09-06T02:38:57.466Z"}	2026-09-05 23:10:13.173448+00
 83	1c9718fc-9a24-41fe-8dd7-e863fa6844ce	2026-09-07	{"gastos": [], "demandas": [], "financas": [], "geradoEm": "2026-09-08T02:22:06.862Z"}	2026-09-07 03:33:24.431133+00
 161	1c9718fc-9a24-41fe-8dd7-e863fa6844ce	2026-09-09	{"gastos": [], "demandas": [], "financas": [], "geradoEm": "2026-09-09T21:05:28.079Z"}	2026-09-09 03:43:44.425257+00
-182	1c9718fc-9a24-41fe-8dd7-e863fa6844ce	2026-09-20	{"gastos": [], "demandas": [], "financas": [], "geradoEm": "2026-09-21T00:54:28.418Z"}	2026-09-21 00:54:28.522397+00
+182	1c9718fc-9a24-41fe-8dd7-e863fa6844ce	2026-09-20	{"gastos": [], "demandas": [], "financas": [], "geradoEm": "2026-09-21T01:44:05.110Z"}	2026-09-21 00:54:28.522397+00
+184	4c9add6f-2949-4539-8980-1ac9f840ff8e	2026-09-20	{"gastos": [], "demandas": [], "financas": [], "geradoEm": "2026-09-21T01:46:43.093Z"}	2026-09-21 01:44:19.568013+00
 131	1c9718fc-9a24-41fe-8dd7-e863fa6844ce	2026-09-08	{"gastos": [], "demandas": [], "financas": [], "geradoEm": "2026-09-08T22:47:12.742Z"}	2026-09-08 03:20:38.047247+00
 45	1c9718fc-9a24-41fe-8dd7-e863fa6844ce	2026-09-06	{"gastos": [], "demandas": [], "financas": [], "geradoEm": "2026-09-07T00:59:54.321Z"}	2026-09-06 03:11:58.592647+00
 \.
@@ -209,7 +210,7 @@ COPY public.gastos (id, user_id, projeto, cliente, descricao, valor, data, creat
 -- Name: agenda_backups_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.agenda_backups_id_seq', 182, true);
+SELECT pg_catalog.setval('public.agenda_backups_id_seq', 186, true);
 
 
 --
@@ -369,5 +370,5 @@ ALTER TABLE public.gastos ENABLE ROW LEVEL SECURITY;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict MOqcJ0xseabIIuYYdbF8Laigbb6rsjUwbmbwhI81memtK7aXkzicEccG2ifayHA
+\unrestrict y4lUZYmjvasd6AddwVpRh0PBN6nPBiK5LQHqmSLGOoYHrGdtc8GPw25HK9mdZ3C
 
