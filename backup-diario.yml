@@ -1,0 +1,41 @@
+name: Backup diário do banco de dados
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # todo dia às 06:00 UTC (~03:00 Brasília)
+  workflow_dispatch:        # permite rodar manualmente também
+
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar cliente do PostgreSQL 17
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17 || sudo apt-get install -y postgresql-client
+
+      - name: Gerar o backup
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          mkdir -p backups
+          DATA=$(date +'%Y-%m-%d')
+          pg_dump "$SUPABASE_DB_URL" --schema=public --no-owner --no-privileges > "backups/backup-$DATA.sql"
+
+      - name: Apagar backups com mais de 30 dias
+        run: |
+          find backups -name "backup-*.sql" -mtime +30 -delete
+
+      - name: Subir o backup pro repositório
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add backups/
+          git diff --staged --quiet || git commit -m "backup automatico diario"
+          git push
