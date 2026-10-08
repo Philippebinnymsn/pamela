@@ -1237,8 +1237,7 @@ function DetalheAtendimento({ demanda: d, financas, extras, onFechar, onEditar, 
 
 /* ---------- Popup: visualizar contrato (sem baixar), com opção de baixar ou enviar por WhatsApp ---------- */
 function VisualizadorContrato({ demanda, onFechar }) {
-  const [estado, setEstado] = useState({ carregando: true, erro: '', blob: null, url: '', linkWhats: '' });
-  const [telefone, setTelefone] = useState('');
+  const [estado, setEstado] = useState({ carregando: true, erro: '', blob: null, url: '' });
   const nome = demanda.contratoNome || 'contrato';
   const ehPdf = contratoEhPdf({ nome, tipo: demanda.contratoTipo });
   const ehImagem = contratoEhImagem({ nome, tipo: demanda.contratoTipo });
@@ -1253,20 +1252,16 @@ function VisualizadorContrato({ demanda, onFechar }) {
     let cancelado = false;
     let urlCriada = '';
     (async () => {
-      const [{ data: arquivo, error }, { data: assinada }] = await Promise.all([
-        supabase.storage.from(BUCKET_CONTRATOS).download(demanda.contratoPath),
-        // Link temporário (7 dias) usado só no botão de WhatsApp.
-        supabase.storage.from(BUCKET_CONTRATOS).createSignedUrl(demanda.contratoPath, 60 * 60 * 24 * 7),
-      ]);
+      const { data: arquivo, error } = await supabase.storage.from(BUCKET_CONTRATOS).download(demanda.contratoPath);
       if (cancelado) return;
       if (error || !arquivo) {
-        setEstado({ carregando: false, erro: 'Não foi possível abrir o contrato. ' + (error?.message || ''), blob: null, url: '', linkWhats: '' });
+        setEstado({ carregando: false, erro: 'Não foi possível abrir o contrato. ' + (error?.message || ''), blob: null, url: '' });
         return;
       }
       const tipo = ehPdf ? 'application/pdf' : (arquivo.type || demanda.contratoTipo || 'application/octet-stream');
       const blob = arquivo.type === tipo ? arquivo : new Blob([arquivo], { type: tipo });
       urlCriada = URL.createObjectURL(blob);
-      setEstado({ carregando: false, erro: '', blob, url: urlCriada, linkWhats: assinada?.signedUrl || '' });
+      setEstado({ carregando: false, erro: '', blob, url: urlCriada });
     })();
     return () => { cancelado = true; if (urlCriada) URL.revokeObjectURL(urlCriada); };
   }, [demanda.contratoPath]);
@@ -1280,14 +1275,6 @@ function VisualizadorContrato({ demanda, onFechar }) {
     document.body.removeChild(a);
   }
 
-  function abrirWhatsApp() {
-    if (!estado.linkWhats) { alert('Não foi possível gerar o link do contrato. Tente novamente.'); return; }
-    const mensagem = `Olá, ${demanda.cliente}! Segue o contrato do seu atendimento (${demanda.projeto}): ${estado.linkWhats}`;
-    let numero = telefone.replace(/\D/g, '');
-    if (numero && numero.length <= 11) numero = '55' + numero;
-    window.open(`https://wa.me/${numero}?text=${encodeURIComponent(mensagem)}`, '_blank', 'noopener');
-  }
-
   const arquivoParaCompartilhar = useMemo(() => {
     try {
       if (!estado.blob || typeof File === 'undefined') return null;
@@ -1296,12 +1283,19 @@ function VisualizadorContrato({ demanda, onFechar }) {
     } catch (e) { return null; }
   }, [estado.blob, nome]);
 
-  async function compartilharArquivo() {
-    try {
-      await navigator.share({ files: [arquivoParaCompartilhar], title: `Contrato — ${demanda.cliente}` });
-    } catch (e) {
-      if (e && e.name !== 'AbortError') alert('Não foi possível compartilhar o arquivo: ' + e.message);
+  // Envia o próprio arquivo: o celular abre a folha de compartilhamento (WhatsApp aparece nela, com o PDF já anexado).
+  // Onde o navegador não consegue anexar arquivo (alguns computadores), baixa o arquivo e abre o WhatsApp Web para anexar.
+  async function enviarPorWhatsApp() {
+    if (arquivoParaCompartilhar) {
+      try {
+        await navigator.share({ files: [arquivoParaCompartilhar], title: `Contrato — ${demanda.cliente}`, text: `Contrato — ${demanda.cliente}` });
+      } catch (e) {
+        if (e && e.name !== 'AbortError') alert('Não foi possível compartilhar o arquivo: ' + e.message);
+      }
+      return;
     }
+    baixar();
+    window.open('https://web.whatsapp.com/', '_blank', 'noopener');
   }
 
   return (
@@ -1335,30 +1329,19 @@ function VisualizadorContrato({ demanda, onFechar }) {
         </div>
 
         <div className="p-3 sm:p-4 flex flex-col gap-2" style={{ borderTop: '1px solid #E8E3DC' }}>
-          <input
-            type="tel"
-            inputMode="tel"
-            placeholder="WhatsApp com DDD (opcional — vazio = escolher o contato)"
-            value={telefone}
-            onChange={(e) => setTelefone(e.target.value)}
-            className="focusable rounded px-3 py-2 text-sm"
-          />
           <div className="flex flex-wrap gap-2">
             <button onClick={baixar} disabled={!estado.url} className="focusable flex-1 flex items-center justify-center gap-1.5 mono text-xs font-semibold rounded py-2.5" style={{ border: '1px solid #E8E3DC', color: '#2B2724', opacity: estado.url ? 1 : 0.5 }}>
               <Download size={14} /> Baixar
             </button>
-            <button onClick={abrirWhatsApp} disabled={!estado.linkWhats} className="focusable flex-1 flex items-center justify-center gap-1.5 mono text-xs font-semibold rounded py-2.5" style={{ background: '#4C7A5E', color: '#FFFFFF', opacity: estado.linkWhats ? 1 : 0.5 }}>
+            <button onClick={enviarPorWhatsApp} disabled={!estado.blob} className="focusable flex-1 flex items-center justify-center gap-1.5 mono text-xs font-semibold rounded py-2.5" style={{ background: '#4C7A5E', color: '#FFFFFF', opacity: estado.blob ? 1 : 0.5 }}>
               <MessageCircle size={14} /> Enviar por WhatsApp
             </button>
-            {arquivoParaCompartilhar && (
-              <button onClick={compartilharArquivo} className="focusable flex-1 flex items-center justify-center gap-1.5 mono text-xs font-semibold rounded py-2.5" style={{ border: '1px solid #4C7A5E', color: '#4C7A5E' }}>
-                <MessageCircle size={14} /> Enviar o arquivo
-              </button>
-            )}
           </div>
-          <p className="mono text-[10px]" style={{ color: '#8C8478' }}>
-            "Enviar por WhatsApp" manda um link do contrato, válido por 7 dias.{arquivoParaCompartilhar ? ' "Enviar o arquivo" abre o compartilhamento do celular para mandar o PDF em si.' : ''}
-          </p>
+          {estado.blob && !arquivoParaCompartilhar && (
+            <p className="mono text-[10px]" style={{ color: '#8C8478' }}>
+              Neste aparelho o navegador não anexa arquivo direto no WhatsApp: ao tocar, o contrato é baixado e o WhatsApp Web abre para você anexá-lo.
+            </p>
+          )}
         </div>
       </div>
     </div>
