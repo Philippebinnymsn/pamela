@@ -46,6 +46,8 @@ const SERVICOS = ['Curso de Penteados', 'Penteado Social', 'Noiva', 'Teste de No
 
 // Serviços extras (custos): entram no Financeiro como SAÍDA.
 const TIPOS_EXTRA = ['Maquiagem', 'Penteadista extra', 'Assistente penteadista'];
+// O deslocamento também vira saída (custo), com este tipo — não aparece na lista de serviços extras do formulário.
+const TIPO_DESLOCAMENTO = 'Deslocamento';
 
 // Contratos ficam num bucket privado do Supabase Storage.
 const BUCKET_CONTRATOS = 'contratos';
@@ -280,7 +282,9 @@ const emptyGasto = { projeto: '', cliente: '', descricao: '', valor: '', data: '
 const arred2 = (n) => Math.round(n * 100) / 100;
 function valorSinalNumero(form) { return form.temSinal ? (Number(form.valorSinal) || 0) : 0; }
 // O que sobra depois do sinal (é isso que se divide em pagamentos).
-function valorRestante(form) { return arred2((Number(form.valor) || 0) - valorSinalNumero(form)); }
+// Total que o cliente paga: serviço + deslocamento (o deslocamento entra junto na entrada do financeiro).
+function totalAReceber(form) { return arred2((Number(form.valor) || 0) + (Number(form.valorDeslocamento) || 0)); }
+function valorRestante(form) { return arred2(totalAReceber(form) - valorSinalNumero(form)); }
 
 function gerarParcelamento(form, quantidade) {
   const qtd = Math.max(2, Number(quantidade) || 2);
@@ -314,7 +318,7 @@ function linhasFinanceiras(form, demandaId, pagoAnterior) {
   if (form.parcelado && form.parcelas.length > 1) {
     form.parcelas.forEach((p) => itens.push({ valor: Number(p.valor), data: p.data, sinal: false }));
   } else {
-    itens.push({ valor: sinal > 0 ? valorRestante(form) : Number(form.valor), data: form.dataPagamento || form.prazo, sinal: false });
+    itens.push({ valor: sinal > 0 ? valorRestante(form) : totalAReceber(form), data: form.dataPagamento || form.prazo, sinal: false });
   }
   const grupoId = itens.length > 1 ? crypto.randomUUID() : null;
   const temSinal = itens.some((it) => it.sinal);
@@ -361,6 +365,42 @@ function rotuloParcela(p, itens) {
   }
   return { titulo: `Parcela ${p.parcelaNumero}/${p.parcelaTotal}`, curto: `${p.parcelaNumero}º pgt` };
 }
+// Preenche o formulário de atendimento com o que a IA entendeu do texto ditado.
+function aplicarDadosDeVoz(form, d) {
+  const novo = { ...form };
+  const num = (v) => (v != null && v !== '' && Number(v) > 0 ? String(Number(v)) : null);
+  const ehData = (x) => /^\d{4}-\d{2}-\d{2}$/.test(x || '');
+  const ehHora = (x) => /^\d{1,2}:\d{2}$/.test(x || '');
+  if (d.cliente) novo.cliente = String(d.cliente).trim();
+  if (d.projeto && SERVICOS.includes(d.projeto)) novo.projeto = d.projeto;
+  if (Array.isArray(d.datas)) {
+    const datas = [...new Set(d.datas.filter(ehData))].sort();
+    if (datas.length > 0) { novo.datasGravacao = datas; novo.prazo = datas[datas.length - 1]; }
+  }
+  if (ehHora(d.horario_inicio)) {
+    novo.horario = d.horario_inicio.padStart(5, '0');
+    novo.horarioTermino = ehHora(d.horario_termino) ? d.horario_termino.padStart(5, '0') : somarUmaHora(novo.horario);
+  }
+  if (d.no_estudio === true) { novo.noEstudio = true; novo.endereco = ''; }
+  else if (d.endereco) { novo.noEstudio = false; novo.endereco = String(d.endereco).trim(); }
+  if (Number(d.quantidade_pessoas) > 1) { novo.maisDeUmaPessoa = true; novo.quantidadePessoas = Math.round(Number(d.quantidade_pessoas)); }
+  if (num(d.valor)) novo.valor = num(d.valor);
+  if (num(d.valor_deslocamento)) novo.valorDeslocamento = num(d.valor_deslocamento);
+  if (num(d.valor_sinal)) {
+    novo.temSinal = true;
+    novo.valorSinal = num(d.valor_sinal);
+    novo.dataSinal = ehData(d.data_sinal) ? d.data_sinal : (novo.dataSinal || chaveHojeLocal());
+  }
+  if (d.nota_fiscal === true) novo.comNF = true;
+  if (Array.isArray(d.extras)) {
+    const extras = d.extras.filter((e) => TIPOS_EXTRA.includes(e.tipo)).map((e) => ({ tipo: e.tipo, nome: e.nome ? String(e.nome) : '', valor: num(e.valor) || '' }));
+    if (extras.length > 0) novo.extras = [...(form.extras || []), ...extras];
+  }
+  if (d.descricao) novo.descricao = String(d.descricao);
+  if (d.status === 'confirmado' || d.status === 'pre_reserva') novo.status = d.status;
+  return recalcularParcelas(novo);
+}
+
 function somarUmaHora(hhmmStr) {
   const m = minutos(hhmmStr);
   if (m == null) return '';
@@ -601,7 +641,7 @@ function gerarPdfResumo({ demandas, financas, gastos }) {
   const ordenadas = [...demandas].sort((a, b) => (datasDaDemanda(a)[0] || '').localeCompare(datasDaDemanda(b)[0] || ''));
   const hoje = new Date().toLocaleDateString('pt-BR');
   const finDe = (id) => financas.filter((f) => f.origemDemandaId === id).sort((a, b) => (a.eSinal === b.eSinal ? (a.dataPagamento || '').localeCompare(b.dataPagamento || '') : a.eSinal ? -1 : 1));
-  const extrasDe = (id) => gastos.filter((g) => g.origemDemandaId === id);
+  const extrasDe = (id) => gastos.filter((g) => g.origemDemandaId === id && g.extraTipo !== 'Deslocamento');
   const ligadas = new Set(demandas.map((d) => d.id));
   const finDemandas = financas.filter((f) => ligadas.has(f.origemDemandaId));
   const recebido = finDemandas.filter((f) => f.pago).reduce((s, f) => s + f.valor, 0);
@@ -617,7 +657,7 @@ function gerarPdfResumo({ demandas, financas, gastos }) {
     ['Deslocamentos', moeda(demandas.reduce((s, d) => s + (d.valorDeslocamento || 0), 0))],
     ['Recebido', moeda(recebido)],
     ['A receber', moeda(aReceber)],
-    ['Custos extras', moeda(extras)],
+    ['Saídas (extras + desloc.)', moeda(extras)],
   ];
   const colW = LW / 3;
   caixa(y, 56, '#C39B99');
@@ -639,7 +679,7 @@ function gerarPdfResumo({ demandas, financas, gastos }) {
     add('Local', d.noEstudio ? 'No estúdio' : (d.endereco || 'Endereço não informado'));
     add('Pessoas', String(d.quantidadePessoas || 1));
     add('Serviço', moeda(d.valor || 0) + (d.comNF ? ' (com NF)' : ''));
-    if (d.valorDeslocamento > 0) add('Deslocamento', moeda(d.valorDeslocamento));
+    if (d.valorDeslocamento > 0) { add('Deslocamento', moeda(d.valorDeslocamento)); add('Total a receber', moeda((d.valor || 0) + d.valorDeslocamento)); }
     extrasDe(d.id).forEach((g, i) => add(i === 0 ? 'Extras (custo)' : '', `${g.extraTipo || 'Extra'}${g.extraNome ? ' — ' + g.extraNome : ''}: ${moeda(g.valor)}`));
     const parcelas = finDe(d.id);
     parcelas.forEach((p, i) => add(i === 0 ? 'Pagamentos' : '', `${rotuloParcela(p, parcelas).titulo}: ${moeda(p.valor)}${p.dataPagamento ? ' · ' + fmtData(p.dataPagamento) : ''} · ${p.pago ? 'Pago' : 'Pendente'}`));
@@ -1079,7 +1119,8 @@ export default function App() {
     const { error: erroApagar } = await supabase.from('gastos').delete().eq('origem_demanda_id', demandaId);
     if (erroApagar) { alert('Atendimento salvo, mas houve um erro ao atualizar os serviços extras: ' + erroApagar.message); return; }
     const validos = (form.extras || []).filter((e) => Number(e.valor) > 0);
-    if (validos.length === 0) return;
+    const deslocamento = Number(form.valorDeslocamento) || 0;
+    if (validos.length === 0 && deslocamento <= 0) return;
     const linhas = validos.map((e) => ({
       projeto: form.projeto,
       cliente: form.cliente,
@@ -1090,6 +1131,18 @@ export default function App() {
       extra_tipo: e.tipo,
       extra_nome: e.nome || '',
     }));
+    if (deslocamento > 0) {
+      linhas.push({
+        projeto: form.projeto,
+        cliente: form.cliente,
+        descricao: 'Custo de deslocamento',
+        valor: deslocamento,
+        data: form.prazo,
+        origem_demanda_id: demandaId,
+        extra_tipo: TIPO_DESLOCAMENTO,
+        extra_nome: '',
+      });
+    }
     const { error } = await supabase.from('gastos').insert(linhas);
     if (error) alert('Atendimento salvo, mas houve um erro ao lançar os serviços extras como saída: ' + error.message);
   }
@@ -1630,7 +1683,7 @@ function CamposExtras({ form, setForm }) {
 /* ---------- Pagamento com sinal ---------- */
 function CamposSinal({ form, setForm }) {
   const sinal = Number(form.valorSinal) || 0;
-  const total = Number(form.valor) || 0;
+  const total = totalAReceber(form);
   const invalido = form.temSinal && sinal > 0 && total > 0 && sinal >= total;
   return (
     <div className="flex flex-col gap-2">
@@ -1656,7 +1709,7 @@ function CamposSinal({ form, setForm }) {
             </div>
           </div>
           {invalido ? (
-            <div className="mono text-[11px]" style={{ color: '#B4483D' }}>O sinal precisa ser menor que o valor do serviço.</div>
+            <div className="mono text-[11px]" style={{ color: '#B4483D' }}>O sinal precisa ser menor que o valor total (serviço + deslocamento).</div>
           ) : (
             <div className="mono text-[11px] flex flex-col gap-0.5" style={{ color: '#8C8478' }}>
               <span>Sinal: {moeda(sinal)}</span>
@@ -1778,6 +1831,11 @@ function DetalheAtendimento({ demanda: d, financas, extras, onFechar, onEditar, 
               ) : '—'}
             </InfoCampo>
 
+            {d.valorDeslocamento > 0 && (
+              <InfoCampo rotulo="TOTAL A RECEBER">
+                <span className="mono font-semibold">{moeda((d.valor || 0) + d.valorDeslocamento)}</span>
+              </InfoCampo>
+            )}
             <InfoCampo rotulo="VALOR DO SERVIÇO">
               <span className="mono font-semibold">{moeda(d.valor)}</span>
               {d.comNF && <div className="mono text-[10px]" style={{ color: '#8C8478' }}>líq. {moeda(valorLiquidoTrabalho(d.valor, true))}</div>}
@@ -2024,6 +2082,32 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
   const [detalheId, setDetalheId] = useState(null);
   const [contratoAberto, setContratoAberto] = useState(null);
   const [form, setForm] = useState(emptyDemanda);
+  const [textoVoz, setTextoVoz] = useState('');
+  const [interpretando, setInterpretando] = useState(false);
+  const [avisoVoz, setAvisoVoz] = useState(null); // { tipo: 'ok' | 'erro', texto, duvidas }
+
+  async function interpretarVoz() {
+    const texto = textoVoz.trim();
+    if (!texto || interpretando) return;
+    setInterpretando(true);
+    setAvisoVoz(null);
+    try {
+      const { data, error } = await supabase.functions.invoke('interpretar-atendimento', { body: { texto } });
+      if (error) {
+        let detalhe = error.message;
+        try { const j = await error.context.json(); if (j && j.erro) detalhe = j.erro; } catch (e) {}
+        throw new Error(detalhe);
+      }
+      if (!data || !data.dados) throw new Error('A IA não devolveu dados.');
+      setForm((atual) => aplicarDadosDeVoz(atual, data.dados));
+      setAvisoVoz({ tipo: 'ok', texto: 'Formulário preenchido. Confira os campos e toque em Salvar.', duvidas: Array.isArray(data.dados.duvidas) ? data.dados.duvidas : [] });
+    } catch (e) {
+      console.error('Erro ao interpretar atendimento:', e);
+      setAvisoVoz({ tipo: 'erro', texto: 'Não consegui interpretar agora: ' + (e.message || e) + '. Você pode preencher o formulário normalmente.', duvidas: [] });
+    } finally {
+      setInterpretando(false);
+    }
+  }
 
   // Aviso de conflito: mesmo dia e horários que se sobrepõem a outro atendimento.
   const conflitos = useMemo(() => acharConflitos(form, demandas, editando), [form, demandas, editando]);
@@ -2055,6 +2139,7 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
 
   function abrirNova() {
     setEditando(null);
+    setTextoVoz(''); setAvisoVoz(null);
     setForm(emptyDemanda);
     setFormAberto(true);
   }
@@ -2064,7 +2149,7 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
     const sinalFin = financasVinculadas.find((f) => f.eSinal);
     const restantes = financasVinculadas.filter((f) => !f.eSinal);
     const parcelado = restantes.length > 1;
-    setForm({
+    const formEdicao = {
       cliente: demanda.cliente,
       projeto: demanda.projeto,
       etapa: demanda.etapa,
@@ -2092,7 +2177,10 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
       contratoArquivo: null,
       contratoNome: demanda.contratoPath ? (demanda.contratoNome || 'contrato') : '',
       removerContrato: false,
-    });
+    };
+    // Atendimentos antigos têm pagamentos sem o deslocamento: se a soma não bate com o total, refaz a divisão.
+    const somaPagamentos = arred2(valorSinalNumero(formEdicao) + formEdicao.parcelas.reduce((t, p) => t + (Number(p.valor) || 0), 0));
+    setForm(parcelado && Math.abs(somaPagamentos - totalAReceber(formEdicao)) > 0.009 ? recalcularParcelas(formEdicao) : formEdicao);
     setEditando(demanda.id);
     setDetalheId(null);
     setFormAberto(true);
@@ -2100,12 +2188,13 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
 
   // Serviços extras de um atendimento = gastos ligados a ele que têm tipo de extra.
   function extrasDaDemanda(demandaId) {
-    return (gastos || []).filter((g) => g.origemDemandaId === demandaId && g.extraTipo);
+    return (gastos || []).filter((g) => g.origemDemandaId === demandaId && g.extraTipo && g.extraTipo !== TIPO_DESLOCAMENTO);
   }
 
   function fecharForm() {
     setFormAberto(false);
     setEditando(null);
+    setTextoVoz(''); setAvisoVoz(null);
     setForm(emptyDemanda);
   }
 
@@ -2115,7 +2204,7 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
     if (!form.prazo) { alert('Selecione o dia do atendimento.'); return; }
     if (form.temSinal) {
       const sinal = Number(form.valorSinal) || 0;
-      if (sinal <= 0 || sinal >= Number(form.valor)) { alert('O valor do sinal precisa ser maior que zero e menor que o valor do serviço.'); return; }
+      if (sinal <= 0 || sinal >= totalAReceber(form)) { alert('O valor do sinal precisa ser maior que zero e menor que o valor total (serviço + deslocamento).'); return; }
     }
 
     // Quantidade de pessoas: só vale se o check estiver marcado (mínimo 2).
@@ -2314,6 +2403,28 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
               <h2 className="mono text-sm tracking-widest" style={{ color: '#8C8478' }}>{editando ? 'EDITAR ATENDIMENTO' : 'NOVO ATENDIMENTO'}</h2>
               <button type="button" onClick={fecharForm} className="focusable" aria-label="Fechar"><X size={18} color="#8C8478" /></button>
             </div>
+            {!editando && (
+              <div className="rounded p-3 mb-3 flex flex-col gap-2" style={{ border: '1px dashed #C39B99', background: '#C39B9912' }}>
+                <span className="mono text-[11px]" style={{ color: '#8C8478' }}>DITAR ATENDIMENTO (IA)</span>
+                <textarea
+                  rows={3}
+                  placeholder={'Toque no microfone do teclado e fale. Ex.: "Noiva Maria, dia 15 de novembro, das 14 às 18, em Campinas, 800 de serviço, 200 de deslocamento, sinal de 300"'}
+                  value={textoVoz}
+                  onChange={(e) => setTextoVoz(e.target.value)}
+                  className="focusable rounded px-3 py-2 text-sm"
+                  style={{ height: 'auto', resize: 'vertical' }}
+                />
+                <button type="button" onClick={interpretarVoz} disabled={interpretando || !textoVoz.trim()} className="focusable mono text-xs font-semibold px-3 py-2 rounded" style={{ background: '#2B2724', color: '#FAF8F5', opacity: interpretando || !textoVoz.trim() ? 0.5 : 1 }}>
+                  {interpretando ? 'Interpretando...' : 'Preencher formulário'}
+                </button>
+                {avisoVoz && (
+                  <div className="mono text-[11px]" style={{ color: avisoVoz.tipo === 'ok' ? '#4C7A5E' : '#B4483D' }}>
+                    {avisoVoz.texto}
+                    {avisoVoz.duvidas.map((q, i) => <div key={i} style={{ color: '#8C5F5C' }}>• {q}</div>)}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex flex-col gap-3">
               <input required placeholder="Cliente" value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} className="focusable rounded px-3 py-2 text-sm" />
               <select required value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} className="focusable rounded px-3 py-2 text-sm">
@@ -2447,7 +2558,7 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
 
               <div className="flex flex-col gap-1">
                 <span className="mono text-[11px]" style={{ color: '#8C8478' }}>VALOR DO DESLOCAMENTO (R$, opcional)</span>
-                <input type="number" inputMode="decimal" placeholder="0,00" value={form.valorDeslocamento} onChange={(e) => setForm({ ...form, valorDeslocamento: e.target.value })} className="focusable rounded px-3 py-2 text-sm" />
+                <input type="number" inputMode="decimal" placeholder="0,00" value={form.valorDeslocamento} onChange={(e) => setForm(recalcularParcelas({ ...form, valorDeslocamento: e.target.value }))} className="focusable rounded px-3 py-2 text-sm" />
               </div>
 
               <CamposExtras form={form} setForm={setForm} />
@@ -2474,7 +2585,8 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
                 </div>
                 {form.valor > 0 && (
                   <span className="mono text-[11px] mt-1" style={{ color: '#8C8478' }}>
-                    Valor a receber: {moeda(valorLiquidoTrabalho(Number(form.valor), form.comNF))}
+                    Valor a receber: {moeda(valorLiquidoTrabalho(totalAReceber(form), form.comNF))}
+                    {Number(form.valorDeslocamento) > 0 && ` (serviço ${moeda(Number(form.valor))} + deslocamento ${moeda(Number(form.valorDeslocamento))})`}
                   </span>
                 )}
               </div>
@@ -2858,6 +2970,7 @@ function TelaFinanceiro({ financas, gastos, demandas, onCriarLancamento, onAtual
         total: ordenados.length,
         statusGrupo,
         valorTotal: ordenados.reduce((s, f) => s + (f.valorBruto ?? f.valor), 0),
+        deslocamento: (demandas || []).find((d) => d.id === primeira.origemDemandaId)?.valorDeslocamento || 0,
         comNF: primeira.comNF,
         dataReferencia: (proximaNaoPaga || ordenados[ordenados.length - 1]).dataPagamento,
       };
@@ -3036,7 +3149,7 @@ function TelaFinanceiro({ financas, gastos, demandas, onCriarLancamento, onAtual
                   </div>
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="mono text-sm">{moeda(g.valorTotal)}</div>
+                      <div className="mono text-sm">{moeda(g.valorTotal)}{g.deslocamento > 0 && <span className="text-[10px] font-normal" style={{ color: '#8C8478' }}> ({moeda(g.deslocamento)} desloc.)</span>}</div>
                       {g.comNF && <div className="mono text-[10px]" style={{ color: '#8C8478' }}>com NF</div>}
                     </div>
                     <div className="flex items-center gap-2">
@@ -3100,7 +3213,7 @@ function TelaFinanceiro({ financas, gastos, demandas, onCriarLancamento, onAtual
                     )}
                   </div>
                   <div className="col-span-2 text-right">
-                    <div className="mono text-sm">{moeda(g.valorTotal)}</div>
+                    <div className="mono text-sm">{moeda(g.valorTotal)}{g.deslocamento > 0 && <span className="text-[10px] font-normal" style={{ color: '#8C8478' }}> ({moeda(g.deslocamento)} desloc.)</span>}</div>
                     {g.comNF && <div className="mono text-[10px]" style={{ color: '#8C8478' }}>com NF</div>}
                   </div>
                   <div className="col-span-2 flex flex-wrap justify-end items-center gap-2">
