@@ -32,7 +32,13 @@ const STATUS_SELECIONAVEIS = {
 // Calcula o status "de verdade" de um atendimento: se est\u00e1 aguardando
 // pagamento e alguma parcela ligada a ele j\u00e1 passou da data sem ser paga,
 // vira "atrasado".
+function todosPagos(demandaId, financas) {
+  const ligadas = financas.filter((f) => f.origemDemandaId === demandaId);
+  return ligadas.length > 0 && ligadas.every((f) => f.pago);
+}
 function statusExibicaoChave(demanda, financas) {
+  // Tudo pago no financeiro = concluído, mesmo que o status gravado tenha ficado para trás.
+  if (todosPagos(demanda.id, financas)) return 'concluido';
   if (demanda.status === 'aguardando_pagamento') {
     const temAtraso = financas.some(
       (f) => f.origemDemandaId === demanda.id && !f.pago && diasRestantes(f.dataPagamento) < 0
@@ -1093,6 +1099,17 @@ export default function App() {
     if (!session || !carregado) return;
     atualizarStatusPorAtendimentoPassado();
   }, [session, carregado]);
+
+  // Autocorreção: atendimento com tudo pago no financeiro mas status gravado diferente vira "Concluído".
+  useEffect(() => {
+    if (!session || !carregado) return;
+    const ids = demandas.filter((d) => d.status !== 'concluido' && todosPagos(d.id, financas)).map((d) => d.id);
+    if (ids.length === 0) return;
+    supabase.from('demandas').update({ status: 'concluido' }).in('id', ids).then(({ error }) => {
+      if (error) console.error('Erro ao corrigir status concluído:', error);
+      else carregarTudo();
+    });
+  }, [session, carregado, demandas, financas]);
 
   async function atualizarStatusPorAtendimentoPassado() {
     try {
@@ -2396,12 +2413,12 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
       .filter((d) => filtroCliente === 'Todos' || d.cliente === filtroCliente)
       .filter((d) => {
         if (filtroStatus === 'Todos') return true;
-        if (filtroStatus === 'ativos') return d.status !== 'concluido';
+        if (filtroStatus === 'ativos') return statusExibicaoChave(d, financas) !== 'concluido';
         return statusExibicaoChave(d, financas) === filtroStatus;
       })
       .sort((a, b) => {
-        const aConcluida = a.status === 'concluido' ? 1 : 0;
-        const bConcluida = b.status === 'concluido' ? 1 : 0;
+        const aConcluida = statusExibicaoChave(a, financas) === 'concluido' ? 1 : 0;
+        const bConcluida = statusExibicaoChave(b, financas) === 'concluido' ? 1 : 0;
         if (aConcluida !== bConcluida) return aConcluida - bConcluida;
         return diasRestantes(a.prazo) - diasRestantes(b.prazo);
       });
