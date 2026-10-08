@@ -1130,8 +1130,8 @@ function DetalheAtendimento({ demanda: d, financas, extras, onFechar, onEditar, 
   const horarioTexto = textoHorario(d.horario, d.horarioTermino);
 
   return (
-    <div className="fixed inset-0 flex items-start sm:items-center justify-center p-3 sm:p-6 overflow-y-auto" style={{ background: 'rgba(0,0,0,0.6)', zIndex: 50 }} onClick={onFechar}>
-      <div className="card rounded-lg w-full max-w-lg my-4" role="dialog" aria-modal="true" aria-label={`Atendimento de ${d.cliente}`} onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 flex items-start justify-center p-3 sm:p-6 overflow-y-auto" style={{ background: 'rgba(0,0,0,0.6)', zIndex: 50 }} onClick={onFechar}>
+      <div className="card rounded-lg my-auto w-full max-w-lg" role="dialog" aria-modal="true" aria-label={`Atendimento de ${d.cliente}`} onClick={(e) => e.stopPropagation()}>
         <div className="p-5" style={{ borderLeft: `3px solid ${s.color}`, borderRadius: 8 }}>
           <div className="flex items-start justify-between gap-3 mb-4">
             <div className="min-w-0">
@@ -1627,8 +1627,8 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
       {contratoAberto && <VisualizadorContrato demanda={contratoAberto} onFechar={() => setContratoAberto(null)} />}
 
       {formAberto && (
-        <div className="fixed inset-0 flex items-start sm:items-center justify-center p-4 overflow-y-auto py-8" style={{ background: 'rgba(0,0,0,0.6)' }}>
-          <form onSubmit={salvar} className="card rounded-lg p-5 sm:p-6 w-full max-w-md">
+        <div className="fixed inset-0 flex items-start justify-center p-4 overflow-y-auto py-8" style={{ background: 'rgba(0,0,0,0.6)' }}>
+          <form onSubmit={salvar} className="card rounded-lg my-auto p-5 sm:p-6 w-full max-w-md">
             <div className="flex items-center justify-between mb-4">
               <h2 className="mono text-sm tracking-widest" style={{ color: '#8C8478' }}>{editando ? 'EDITAR ATENDIMENTO' : 'NOVO ATENDIMENTO'}</h2>
               <button type="button" onClick={fecharForm} className="focusable" aria-label="Fechar"><X size={18} color="#8C8478" /></button>
@@ -2083,8 +2083,8 @@ function TelaAgenda({ demandas, financas }) {
       </div>
 
       {formAberto && (
-        <div className="fixed inset-0 flex items-start sm:items-center justify-center p-4 overflow-y-auto py-8" style={{ background: 'rgba(0,0,0,0.6)' }}>
-          <form onSubmit={adicionarTrabalho} className="card rounded-lg p-6 w-full max-w-sm">
+        <div className="fixed inset-0 flex items-start justify-center p-4 overflow-y-auto py-8" style={{ background: 'rgba(0,0,0,0.6)' }}>
+          <form onSubmit={adicionarTrabalho} className="card rounded-lg my-auto p-6 w-full max-w-sm">
             <div className="flex items-center justify-between mb-4">
               <h2 className="mono text-sm tracking-widest" style={{ color: '#8C8478' }}>NOVO TRABALHO</h2>
               <button type="button" onClick={() => setFormAberto(false)} className="focusable" aria-label="Fechar"><X size={18} color="#8C8478" /></button>
@@ -2488,8 +2488,8 @@ function TelaFinanceiro({ financas, gastos, demandas, onCriarLancamento, onAtual
       {subAba === 'gastos' && <TelaGastos gastos={gastos} financas={financas} demandas={demandas} onCriar={onCriarGasto} onExcluir={onExcluirGasto} />}
 
       {formAberto && (
-        <div className="fixed inset-0 flex items-start sm:items-center justify-center p-4 overflow-y-auto py-8" style={{ background: 'rgba(0,0,0,0.6)' }}>
-          <form onSubmit={salvar} className="card rounded-lg p-6 w-full max-w-sm">
+        <div className="fixed inset-0 flex items-start justify-center p-4 overflow-y-auto py-8" style={{ background: 'rgba(0,0,0,0.6)' }}>
+          <form onSubmit={salvar} className="card rounded-lg my-auto p-6 w-full max-w-sm">
             <div className="flex items-center justify-between mb-4">
               <h2 className="mono text-sm tracking-widest" style={{ color: '#8C8478' }}>{editandoLancamento ? 'EDITAR LANÇAMENTO' : 'NOVO LANÇAMENTO'}</h2>
               <button type="button" onClick={fecharForm} className="focusable" aria-label="Fechar"><X size={18} color="#8C8478" /></button>
@@ -2633,8 +2633,8 @@ function TelaGastos({ gastos, financas, demandas, onCriar, onExcluir }) {
       </div>
 
       {formAberto && (
-        <div className="fixed inset-0 flex items-start sm:items-center justify-center p-4 overflow-y-auto py-8" style={{ background: 'rgba(0,0,0,0.6)' }}>
-          <form onSubmit={adicionar} className="card rounded-lg p-6 w-full max-w-sm">
+        <div className="fixed inset-0 flex items-start justify-center p-4 overflow-y-auto py-8" style={{ background: 'rgba(0,0,0,0.6)' }}>
+          <form onSubmit={adicionar} className="card rounded-lg my-auto p-6 w-full max-w-sm">
             <div className="flex items-center justify-between mb-4">
               <h2 className="mono text-sm tracking-widest" style={{ color: '#8C8478' }}>NOVO GASTO</h2>
               <button type="button" onClick={() => setFormAberto(false)} className="focusable" aria-label="Fechar"><X size={18} color="#8C8478" /></button>
