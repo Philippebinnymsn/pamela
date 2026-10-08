@@ -306,6 +306,7 @@ function linhasFinanceiras(form, demandaId, pagoAnterior) {
     itens.push({ valor: sinal > 0 ? valorRestante(form) : Number(form.valor), data: form.dataPagamento || form.prazo, sinal: false });
   }
   const grupoId = itens.length > 1 ? crypto.randomUUID() : null;
+  const temSinal = itens.some((it) => it.sinal);
   let n = 0;
   return itens.map((it, idx) => {
     if (!it.sinal) n += 1;
@@ -324,7 +325,7 @@ function linhasFinanceiras(form, demandaId, pagoAnterior) {
       parcela_total: itens.length,
     };
     if (grupoId) linha.grupo_parcelamento = grupoId;
-    if (it.sinal) linha.e_sinal = true;
+    if (temSinal) linha.e_sinal = it.sinal; // true no sinal, false nas demais (mesmas colunas em todas as linhas)
     return linha;
   });
 }
@@ -777,7 +778,7 @@ export default function App() {
         parcela_numero: idx + 1,
         parcela_total: form.parcelas.length,
         grupo_parcelamento: grupoId,
-        ...(p.sinal ? { e_sinal: true } : {}),
+        ...(form.parcelas.some((x) => x.sinal) ? { e_sinal: Boolean(p.sinal) } : {}),
       }));
       const { error } = await supabase.from('financas').insert(linhas);
       if (error) { alert('Erro ao salvar as parcelas: ' + error.message); return; }
@@ -828,7 +829,7 @@ export default function App() {
         parcela_numero: idx + 1,
         parcela_total: form.parcelas.length,
         grupo_parcelamento: grupoId,
-        ...(p.sinal ? { e_sinal: true } : {}),
+        ...(form.parcelas.some((x) => x.sinal) ? { e_sinal: Boolean(p.sinal) } : {}),
       }));
       const { error } = await supabase.from('financas').insert(linhas);
       if (error) alert('Erro ao salvar as parcelas: ' + error.message);
