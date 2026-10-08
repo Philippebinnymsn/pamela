@@ -10,6 +10,11 @@ create table demandas (
   etapa text not null,
   prazo date not null,
   horario time,
+  horario_termino time,
+  valor_deslocamento numeric not null default 0,
+  contrato_path text,
+  contrato_nome text,
+  contrato_tipo text,
   status text not null,
   data_gravacao date,
   datas_gravacao date[] default '{}',
@@ -50,6 +55,9 @@ create table gastos (
   descricao text not null,
   valor numeric not null default 0,
   data date not null,
+  origem_demanda_id bigint references demandas(id) on delete cascade,
+  extra_tipo text,
+  extra_nome text,
   created_at timestamptz not null default now()
 );
 
@@ -82,3 +90,6 @@ create policy "cada usuario ve so seus backups" on agenda_backups
 alter publication supabase_realtime add table demandas;
 alter publication supabase_realtime add table financas;
 alter publication supabase_realtime add table gastos;
+
+-- Contratos: depois deste script, rode também o supabase-migracao-contrato-extras.sql
+-- (cria o bucket privado e as regras de acesso aos arquivos).
