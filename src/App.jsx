@@ -2156,9 +2156,11 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
   const [perguntaAtual, setPerguntaAtual] = useState('');
   const [textoDigitado, setTextoDigitado] = useState('');
   const [salvando, setSalvando] = useState(false);
+  const [falhouIA, setFalhouIA] = useState(false);
   const recRef = useRef(null);
   const silencioRef = useRef(null);
   const textoRef = useRef('');
+  const ultimoTextoRef = useRef('');
   const rascunhoRef = useRef(rascunho);
   const perguntaRef = useRef('');
   rascunhoRef.current = rascunho;
@@ -2174,8 +2176,10 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
   async function entender(texto) {
     const limpo = String(texto || '').trim();
     if (!limpo) { setFase(rascunhoRef.current.cliente || rascunhoRef.current.valor ? 'revisao' : (SR ? 'revisao' : 'digitar')); setErro('Não ouvi nada. Toque no microfone e fale de novo.'); return; }
+    ultimoTextoRef.current = limpo;
     setFase('entendendo');
     setErro('');
+    setFalhouIA(false);
     const enviado = perguntaRef.current ? `(Estou respondendo à pergunta "${perguntaRef.current}") ${limpo}` : limpo;
     try {
       const dados = await interpretarTextoComIA(enviado);
@@ -2188,6 +2192,7 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
     } catch (e) {
       console.error('Assistente de voz:', e);
       setErro('Não consegui entender agora: ' + (e.message || e));
+      setFalhouIA(true);
       setFase('revisao');
     }
   }
@@ -2299,7 +2304,16 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
           {fase === 'entendendo' && transcricao && <div style={{ marginTop: 16, fontSize: 14, color: '#8C8478', fontStyle: 'italic' }}>“{transcricao}”</div>}
         </div>
 
-        {erro && <div className="mono text-[11px] mt-3" style={{ color: '#B4483D' }}>{erro}</div>}
+        {erro && (
+          <div className="mono text-[11px] mt-3" style={{ color: '#B4483D' }}>
+            {erro}
+            {falhouIA && fase === 'revisao' && (
+              <div style={{ marginTop: 8 }}>
+                <button type="button" onClick={() => entender(ultimoTextoRef.current)} className="focusable mono text-[11px] font-semibold" style={{ padding: '8px 14px', borderRadius: 999, background: '#2B2724', color: '#FAF8F5', border: 'none' }}>Tentar de novo (sem falar outra vez)</button>
+              </div>
+            )}
+          </div>
+        )}
 
         {fase === 'digitar' && (
           <div className="flex flex-col gap-2 mt-2">
