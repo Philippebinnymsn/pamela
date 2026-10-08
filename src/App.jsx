@@ -350,8 +350,11 @@ function TelaLogin() {
   return (
     <div style={{ background: '#FAF8F5', minHeight: '100vh', color: '#2B2724', fontFamily: "'Inter', sans-serif" }} className="flex items-center justify-center p-5">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=Jost:wght@300;400;500&display=swap');
+        html, body { max-width: 100%; }
+        body { overflow-x: hidden; }
         .mono { font-family: 'Manrope', monospace; }
+        .nav-tab { font-family: 'Jost', 'Manrope', sans-serif; letter-spacing: 0.02em; }
         input { background: #FFFFFF; border: 1px solid #E8E3DC; color: #2B2724; font-family: 'Inter', sans-serif; }
         input:focus { outline: 2px solid #C39B99; outline-offset: 1px; }
         .focusable:focus-visible { outline: 2px solid #C39B99; outline-offset: 2px; }
@@ -897,8 +900,11 @@ export default function App() {
         </div>
       )}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=Jost:wght@300;400;500&display=swap');
+        html, body { max-width: 100%; }
+        body { overflow-x: hidden; }
         .mono { font-family: 'Manrope', monospace; }
+        .nav-tab { font-family: 'Jost', 'Manrope', sans-serif; letter-spacing: 0.02em; }
         .card { background: #FFFFFF; border: 1px solid #E8E3DC; transition: border-color .15s ease, transform .15s ease; }
         .card:hover.hoverable { border-color: #3A3A3A; transform: translateY(-1px); }
         .letterbox { height: 4px; background: #E8E3DC; }
@@ -958,8 +964,8 @@ export default function App() {
               <button
                 key={key}
                 onClick={() => setAba(key)}
-                className="focusable mono flex items-center gap-2 px-3 sm:px-4 py-2 rounded text-xs sm:text-sm font-semibold"
-                style={{ background: aba === key ? '#C39B99' : 'transparent', color: aba === key ? '#2B2724' : '#8C8478' }}
+                className="focusable nav-tab flex items-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 rounded text-[13px] sm:text-base"
+                style={{ background: aba === key ? '#C39B99' : 'transparent', color: aba === key ? '#2B2724' : '#8C8478', fontWeight: aba === key ? 500 : 400 }}
               >
                 <Icon size={14} /> {label}
               </button>
@@ -1485,13 +1491,14 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
 
       <div className="card rounded-lg p-4 md:p-5 mb-6">
         <div className="mono text-xs tracking-widest mb-3" style={{ color: '#8C8478' }}>DISTRIBUIÇÃO POR STATUS</div>
-        <div className="flex items-end gap-6 h-20">
+        <div className="grid grid-cols-5 gap-1 sm:gap-6 items-end">
           {Object.entries(STATUS).map(([key, s]) => (
-            <div key={key} className="flex flex-col items-center gap-2 flex-1">
+            <div key={key} className="flex flex-col items-center gap-1 min-w-0">
               <div className="w-full flex items-end justify-center" style={{ height: 56 }}>
-                <div style={{ width: 28, height: `${Math.max(6, (contagem[key] / maxContagem) * 56)}px`, background: s.color, borderRadius: 2 }} />
+                <div style={{ width: 28, maxWidth: '70%', height: `${Math.max(6, (contagem[key] / maxContagem) * 56)}px`, background: s.color, borderRadius: 2 }} />
               </div>
-              <div className="mono text-[11px] text-center" style={{ color: '#8C8478' }}>{contagem[key]} · {s.label}</div>
+              <div className="mono text-[11px] font-semibold text-center" style={{ color: '#2B2724' }}>{contagem[key]}</div>
+              <div className="mono text-[9px] sm:text-[11px] text-center min-w-0 w-full" style={{ color: '#8C8478', lineHeight: 1.2, overflowWrap: 'anywhere' }}>{s.label}</div>
             </div>
           ))}
         </div>
@@ -2298,12 +2305,12 @@ function TelaFinanceiro({ financas, gastos, demandas, onCriarLancamento, onAtual
         )}
       </div>
 
-      <div className="flex gap-1 p-1 rounded mb-4 w-fit" style={{ background: '#FFFFFF', border: '1px solid #E8E3DC' }}>
+      <div className="flex gap-1 p-1 rounded mb-4 w-fit max-w-full" style={{ background: '#FFFFFF', border: '1px solid #E8E3DC' }}>
         {[{ key: 'receber', label: 'A receber' }, { key: 'concluidos', label: 'Concluídos' }, { key: 'gastos', label: 'Gastos' }].map((t) => (
           <button
             key={t.key}
             onClick={() => setSubAba(t.key)}
-            className="focusable subtab px-4 py-1.5 rounded text-sm font-semibold"
+            className="focusable subtab px-3 sm:px-4 py-1.5 rounded text-sm font-semibold"
             style={{ background: subAba === t.key ? '#C39B99' : 'transparent', color: subAba === t.key ? '#2B2724' : '#8C8478' }}
           >
             {t.label}
