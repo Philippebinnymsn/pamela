@@ -95,6 +95,10 @@ function gerarDias(ano, mes) {
   return dias;
 }
 function chaveData(d) { return d.toISOString().slice(0, 10); }
+function chaveHojeLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 function corTexto(hex) {
   const c = (hex || '#FAF8F5').replace('#', '');
   const r = parseInt(c.substring(0, 2), 16), g = parseInt(c.substring(2, 4), 16), b = parseInt(c.substring(4, 6), 16);
@@ -189,6 +193,7 @@ function mapDemandaDoBanco(row) {
     horario: row.horario || '',
     horarioTermino: row.horario_termino || '',
     valorDeslocamento: Number(row.valor_deslocamento) || 0,
+    diasConcluidos: row.dias_concluidos || [],
     contratoPath: row.contrato_path || null,
     contratoNome: row.contrato_nome || '',
     contratoTipo: row.contrato_tipo || '',
@@ -640,6 +645,15 @@ export default function App() {
     carregarTudo();
   }
 
+  // Marca/desmarca "serviço concluído" para um dia específico (guarda a data marcada).
+  async function alternarServicoConcluido(demanda, dia, concluido) {
+    const atuais = demanda.diasConcluidos || [];
+    const novos = concluido ? Array.from(new Set([...atuais, dia])) : atuais.filter((x) => x !== dia);
+    setDemandas((prev) => prev.map((d) => (d.id === demanda.id ? { ...d, diasConcluidos: novos } : d)));
+    const { error } = await supabase.from('demandas').update({ dias_concluidos: novos }).eq('id', demanda.id);
+    if (error) { alert('Erro ao salvar "serviço concluído": ' + error.message); carregarTudo(); }
+  }
+
   async function excluirDemanda(demanda) {
     const { error } = await supabase.from('demandas').delete().eq('id', demanda.id);
     if (error) { alert('Erro ao excluir: ' + error.message); return; }
@@ -975,7 +989,7 @@ export default function App() {
         </div>
       </div>
 
-      {aba === 'demandas' && <TelaDemandas demandas={demandas} financas={financas} gastos={gastos} onCriar={criarDemanda} onAtualizar={atualizarDemanda} onExcluir={excluirDemanda} />}
+      {aba === 'demandas' && <TelaDemandas demandas={demandas} financas={financas} gastos={gastos} onCriar={criarDemanda} onAtualizar={atualizarDemanda} onExcluir={excluirDemanda} onAlternarConcluido={alternarServicoConcluido} />}
       {aba === 'agenda' && <TelaAgenda demandas={demandas} financas={financas} />}
       {aba === 'financeiro' && <TelaFinanceiro financas={financas} gastos={gastos} demandas={demandas} onCriarLancamento={criarLancamento} onAtualizarLancamento={atualizarLancamento} onAtualizarStatus={atualizarStatusPagamento} onExcluirLancamento={excluirLancamento} onCriarGasto={criarGasto} onExcluirGasto={excluirGasto} />}
     </div>
@@ -1355,7 +1369,7 @@ function VisualizadorContrato({ demanda, onFechar }) {
 }
 
 /* ---------- Tela: Demandas ---------- */
-function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcluir }) {
+function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcluir, onAlternarConcluido }) {
   const [filtroCliente, setFiltroCliente] = useState('Todos');
   const [filtroStatus, setFiltroStatus] = useState('ativos');
   const [formAberto, setFormAberto] = useState(false);
@@ -1524,11 +1538,15 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
           const proximaData = datasDoAtendimento.find((x) => diasRestantes(x) >= 0) || datasDoAtendimento[datasDoAtendimento.length - 1];
           const horarioTexto = textoHorario(d.horario, d.horarioTermino);
           const temContrato = Boolean(d.contratoPath);
+          const hoje = chaveHojeLocal();
+          const ehDiaDoServico = datasDoAtendimento.includes(hoje);
+          const concluidoHoje = (d.diasConcluidos || []).includes(hoje);
+          const destaque = ehDiaDoServico && !concluidoHoje;
           return (
             <div
               key={d.id}
               className="card hoverable rounded-lg overflow-hidden"
-              style={{ cursor: 'pointer' }}
+              style={{ cursor: 'pointer', ...(destaque ? { background: '#F8E3E0', borderColor: '#C39B99', boxShadow: '0 0 0 2px #C39B9966, 0 4px 14px rgba(195,155,153,0.35)' } : {}) }}
               role="button"
               tabIndex={0}
               onClick={() => setDetalheId(d.id)}
@@ -1562,7 +1580,23 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
                   <span className="mono text-[11px] font-semibold" style={{ color: s.color }}>{s.label}</span>
                 </div>
 
-                <div className="flex items-center justify-between gap-3 mt-3 pt-3" style={{ borderTop: '1px solid #EFEAE3' }}>
+                {ehDiaDoServico && (
+                  <label
+                    className="flex items-center gap-2.5 mt-3 pt-3 cursor-pointer"
+                    style={{ borderTop: `1px solid ${destaque ? '#C39B9988' : '#EFEAE3'}` }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={concluidoHoje}
+                      onChange={(e) => onAlternarConcluido(d, hoje, e.target.checked)}
+                      style={{ accentColor: '#4C7A5E', width: 20, height: 20, flexShrink: 0 }}
+                    />
+                    <span className="mono text-xs font-semibold" style={{ color: concluidoHoje ? '#4C7A5E' : '#2B2724' }}>Serviço concluído</span>
+                  </label>
+                )}
+
+                <div className="flex items-center justify-between gap-3 mt-3 pt-3" style={{ borderTop: `1px solid ${destaque ? '#C39B9988' : '#EFEAE3'}` }}>
                   {temContrato ? (
                     <button
                       onClick={(e) => { e.stopPropagation(); setContratoAberto(d); }}
@@ -2286,17 +2320,17 @@ function TelaFinanceiro({ financas, gastos, demandas, onCriarLancamento, onAtual
         ) : (
           <div style={{ width: '100%', height: 260 }}>
             <ResponsiveContainer>
-              <BarChart data={dadosGrafico} barGap={6}>
+              <BarChart data={dadosGrafico} barGap={6} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#E8E3DC" vertical={false} />
-                <XAxis dataKey="mes" stroke="#8C8478" tick={{ fill: '#8C8478', fontSize: 11, fontFamily: 'IBM Plex Mono' }} axisLine={{ stroke: '#E8E3DC' }} tickLine={false} />
-                <YAxis stroke="#8C8478" tick={{ fill: '#8C8478', fontSize: 11, fontFamily: 'IBM Plex Mono' }} axisLine={{ stroke: '#E8E3DC' }} tickLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                <XAxis dataKey="mes" stroke="#8C8478" tick={{ fill: '#8C8478', fontSize: 11, fontFamily: 'Manrope' }} axisLine={{ stroke: '#E8E3DC' }} tickLine={false} />
+                <YAxis stroke="#8C8478" tick={{ fill: '#8C8478', fontSize: 11, fontFamily: 'Manrope' }} axisLine={{ stroke: '#E8E3DC' }} tickLine={false} tickFormatter={(v) => (v >= 1000 ? `${(v / 1000).toFixed(1).replace('.0', '')}k` : String(v))} width={44} />
                 <Tooltip
                   formatter={(v) => moeda(v)}
                   contentStyle={{ background: '#FFFFFF', border: '1px solid #E8E3DC', borderRadius: 6, fontFamily: 'Inter' }}
                   labelStyle={{ color: '#2B2724' }}
-                  cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                  cursor={{ fill: 'rgba(195,155,153,0.12)' }}
                 />
-                <Legend wrapperStyle={{ fontFamily: 'IBM Plex Mono', fontSize: 11, color: '#8C8478' }} />
+                <Legend verticalAlign="bottom" height={28} wrapperStyle={{ fontFamily: 'Manrope', fontSize: 11, color: '#8C8478', paddingTop: 8 }} />
                 <Bar dataKey="entrada" name="Entrada" fill="#4C7A5E" radius={[3, 3, 0, 0]} />
                 <Bar dataKey="saida" name="Saída" fill="#B4483D" radius={[3, 3, 0, 0]} />
               </BarChart>
