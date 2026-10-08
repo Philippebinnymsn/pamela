@@ -2496,7 +2496,11 @@ function TelaFinanceiro({ financas, gastos, demandas, onCriarLancamento, onAtual
             </div>
             <div className="flex flex-col gap-3">
               <input required placeholder="Cliente" value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} className="focusable rounded px-3 py-2 text-sm" />
-              <input required placeholder="Projeto" value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} className="focusable rounded px-3 py-2 text-sm" />
+              <select required value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} className="focusable rounded px-3 py-2 text-sm">
+                <option value="">Selecione o serviço</option>
+                {SERVICOS.map((sv) => <option key={sv} value={sv}>{sv}</option>)}
+                {form.projeto && !SERVICOS.includes(form.projeto) && <option value={form.projeto}>{form.projeto}</option>}
+              </select>
               <input required type="number" placeholder="Valor total (R$)" value={form.valor} onChange={(e) => setForm({ ...form, valor: e.target.value })} className="focusable rounded px-3 py-2 text-sm" />
               <div className="flex flex-col gap-1">
                 <span className="mono text-[11px]" style={{ color: '#8C8478' }}>DATA DO TRABALHO</span>
