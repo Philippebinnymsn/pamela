@@ -2652,7 +2652,7 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
               <div className="p-4" style={{ borderLeft: `3px solid ${s.color}` }}>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs" style={{ color: '#8C8478' }}>{d.cliente}</span>
-                  <span className="mono text-xs font-semibold" style={{ color: s.color }}>{prazoLabel(dias)}</span>
+                  <span className="mono text-xs font-semibold" style={{ color: s.color }}>{statusExibicaoChave(d, financas) === 'concluido' ? 'Realizado' : prazoLabel(dias)}</span>
                 </div>
                 <h3 className="font-semibold text-base mb-2">{d.projeto}</h3>
 
