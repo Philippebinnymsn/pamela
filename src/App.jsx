@@ -3291,8 +3291,267 @@ function TelaAgenda({ demandas, financas, onAbrirAtendimento }) {
 }
 
 /* ---------- Tela: Financeiro ---------- */
+const normalizarTexto = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+
+// Parcelas em aberto que combinam com o que foi dito ("Maria pagou 300"): nome parecido, valor igual primeiro, depois a mais antiga.
+function candidatosPagamento(acao, financas) {
+  const c = normalizarTexto(acao.cliente);
+  if (!c) return [];
+  const v = Number(acao.valor) || 0;
+  return financas
+    .filter((f) => !f.pago)
+    .filter((f) => { const n = normalizarTexto(f.cliente); return n.includes(c) || c.includes(n); })
+    .sort((a, b) => {
+      const ea = v && Math.abs((a.valorBruto ?? a.valor) - v) < 0.01 ? 0 : 1;
+      const eb = v && Math.abs((b.valorBruto ?? b.valor) - v) < 0.01 ? 0 : 1;
+      return ea - eb || new Date(a.dataPagamento) - new Date(b.dataPagamento);
+    });
+}
+const rotuloParcelaVoz = (f) => `${f.cliente} — ${f.projeto}${f.parcelaTotal > 1 ? ` · parcela ${f.parcelaNumero}/${f.parcelaTotal}` : ''} · ${moeda(f.valorBruto ?? f.valor)}${f.dataPagamento ? ` · vence ${fmtData(f.dataPagamento)}` : ''}`;
+
+async function interpretarFinanceiroComIA(texto) {
+  const { data, error } = await supabase.functions.invoke('interpretar-atendimento', { body: { texto, modo: 'financeiro' } });
+  if (error) {
+    let detalhe = error.message;
+    try { const j = await error.context.json(); if (j && j.erro) detalhe = j.erro; } catch (e) {}
+    throw new Error(detalhe);
+  }
+  if (!data || !data.dados || !Array.isArray(data.dados.acoes)) {
+    throw new Error('A função de IA ainda não foi atualizada no Supabase (veja o guia) ou não devolveu dados.');
+  }
+  return data.dados;
+}
+
+function AssistenteVozFinanceiro({ financas, gastos, demandas, onMarcarPago, onCriarGasto, onFechar }) {
+  const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+  const [fase, setFase] = useState(SR ? 'ouvindo' : 'digitar'); // ouvindo | entendendo | revisao | digitar | salvo
+  const [transcricao, setTranscricao] = useState('');
+  const [textoDigitado, setTextoDigitado] = useState('');
+  const [acoes, setAcoes] = useState([]);
+  const [duvidas, setDuvidas] = useState([]);
+  const [erro, setErro] = useState('');
+  const [salvando, setSalvando] = useState(false);
+  const recRef = useRef(null);
+  const silencioRef = useRef(null);
+  const textoRef = useRef('');
+  const finalRef = useRef(false);
+  const inicioRef = useRef(0);
+  const ultimoTextoRef = useRef('');
+
+  function parar() {
+    clearTimeout(silencioRef.current);
+    const r = recRef.current;
+    recRef.current = null;
+    if (r) { r.onresult = null; r.onend = null; r.onerror = null; try { r.stop(); } catch (e) {} }
+  }
+
+  async function entender(texto) {
+    const limpo = String(texto || '').trim();
+    if (!limpo) { setFase('revisao'); setErro('Não ouvi nada. Toque no microfone e fale de novo.'); return; }
+    ultimoTextoRef.current = limpo;
+    setFase('entendendo');
+    setErro('');
+    try {
+      const dados = await interpretarFinanceiroComIA(limpo);
+      const lista = (dados.acoes || []).map((a) => {
+        const base = { tipo: a.tipo === 'gasto' ? 'gasto' : 'pagamento', cliente: a.cliente || '', valor: Number(a.valor) || 0, descricao: a.descricao || '', data: a.data || chaveHojeLocal(), incluir: true };
+        if (base.tipo === 'pagamento') { const c = candidatosPagamento(base, financas); base.financaId = c[0] ? c[0].id : null; if (!c[0]) base.incluir = false; }
+        return base;
+      });
+      setAcoes(lista);
+      setDuvidas(dados.duvidas || []);
+      if (lista.length === 0) setErro('Não encontrei nenhum pagamento ou gasto na fala. Tente de novo.');
+      setFase('revisao');
+    } catch (e) {
+      setErro('Não consegui entender agora: ' + (e.message || e));
+      setFase('revisao');
+    }
+  }
+
+  function ouvir(continuacao = false) {
+    if (!SR) { setFase('digitar'); return; }
+    parar();
+    setErro('');
+    if (!continuacao) { textoRef.current = ''; setTranscricao(''); inicioRef.current = Date.now(); }
+    finalRef.current = false;
+    const base = continuacao ? textoRef.current : '';
+    const rec = new SR();
+    rec.lang = 'pt-BR';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onresult = (ev) => {
+      let t = base ? base + ' ' : '';
+      for (let i = 0; i < ev.results.length; i++) t += ev.results[i][0].transcript + ' ';
+      textoRef.current = t.trim();
+      setTranscricao(t.trim());
+      clearTimeout(silencioRef.current);
+      silencioRef.current = setTimeout(() => { finalRef.current = true; try { rec.stop(); } catch (e) {} }, 6000);
+    };
+    rec.onerror = (ev) => {
+      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+        recRef.current = null;
+        setErro('O microfone do navegador não está liberado aqui. Use o microfone do teclado na caixa abaixo.');
+        setFase('digitar');
+      } else if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
+        setErro('Não consegui ouvir (' + ev.error + '). Tente de novo ou digite.');
+      }
+    };
+    rec.onend = () => {
+      if (recRef.current !== rec) return;
+      clearTimeout(silencioRef.current);
+      if (!finalRef.current && Date.now() - inicioRef.current < 5 * 60 * 1000) {
+        try { ouvir(true); return; } catch (e) { /* segue para entender */ }
+      }
+      recRef.current = null;
+      entender(textoRef.current);
+    };
+    recRef.current = rec;
+    setFase('ouvindo');
+    try { rec.start(); } catch (e) { setFase('digitar'); }
+  }
+
+  useEffect(() => {
+    if (SR) ouvir();
+    return () => parar();
+    // eslint-disable-next-line
+  }, []);
+
+  function aoTocarOrbe() {
+    if (fase === 'ouvindo') { const r = recRef.current; finalRef.current = true; if (r) { try { r.stop(); } catch (e) {} } return; }
+    if (fase === 'entendendo' || fase === 'salvo') return;
+    ouvir();
+  }
+
+  const atualizar = (i, campos) => setAcoes((prev) => prev.map((a, idx) => (idx === i ? { ...a, ...campos } : a)));
+  const selecionadas = acoes.filter((a) => a.incluir && (a.tipo === 'gasto' ? Number(a.valor) > 0 && a.descricao : a.financaId));
+
+  async function confirmar() {
+    setSalvando(true);
+    setErro('');
+    try {
+      for (const a of selecionadas) {
+        if (a.tipo === 'pagamento') {
+          const f = financas.find((x) => x.id === a.financaId);
+          if (f) await onMarcarPago(f, true);
+        } else {
+          const ref = (a.cliente && (demandas.find((d) => normalizarTexto(d.cliente).includes(normalizarTexto(a.cliente))) || financas.find((f) => normalizarTexto(f.cliente).includes(normalizarTexto(a.cliente))))) || null;
+          await onCriarGasto({ projeto: ref ? ref.projeto : 'Despesas gerais', cliente: ref ? ref.cliente : (a.cliente || ''), descricao: a.descricao, valor: Number(a.valor), data: a.data || chaveHojeLocal() });
+        }
+      }
+      setFase('salvo');
+      setTimeout(onFechar, 1300);
+    } catch (e) {
+      setErro('Não foi possível salvar: ' + (e.message || e));
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  let titulo = 'Ouvindo…';
+  if (fase === 'entendendo') titulo = 'Entendendo…';
+  else if (fase === 'revisao') titulo = acoes.length ? 'Tudo certo?' : 'Tente de novo';
+  else if (fase === 'digitar') titulo = 'Digite ou dite';
+  else if (fase === 'salvo') titulo = 'Financeiro atualizado';
+
+  return (
+    <div className="av-fundo" onClick={(e) => { if (e.target === e.currentTarget && fase !== 'entendendo') onFechar(); }}>
+      <style>{CSS_ASSISTENTE}</style>
+      <div className="av-folha" role="dialog" aria-label="Assistente de voz do financeiro">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div className="mono text-[11px] tracking-widest" style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#8C8478' }}><Sparkles size={14} color="#C39B99" /> ASSISTENTE · FINANCEIRO</div>
+          <button type="button" onClick={onFechar} aria-label="Fechar" className="focusable"><X size={18} color="#8C8478" /></button>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', minHeight: fase === 'revisao' ? 0 : 150 }}>
+          <div style={{ fontFamily: "'Jost', sans-serif", fontSize: 22, fontWeight: 400, color: '#2B2724', marginTop: 4, marginBottom: 14 }}>{titulo}</div>
+          {(fase === 'ouvindo' || fase === 'entendendo') && (
+            <button type="button" className={`av-orbe ${fase === 'ouvindo' ? 'ouvindo' : ''}`} onClick={aoTocarOrbe} aria-label={fase === 'ouvindo' ? 'Concluir' : 'Falar'}>
+              {fase === 'entendendo' ? <Sparkles size={34} className="av-girar" /> : <span style={{ width: 22, height: 22, borderRadius: 6, background: '#fff' }} />}
+            </button>
+          )}
+          {fase === 'salvo' && <div className="av-orbe" style={{ background: 'radial-gradient(circle at 30% 28%, #8DB59E 0%, #4C7A5E 100%)', boxShadow: '0 10px 28px rgba(76,122,94,.45)' }}><Check size={42} /></div>}
+          {fase === 'ouvindo' && (
+            <div style={{ marginTop: 18, minHeight: 56, fontFamily: "'Jost', sans-serif", fontSize: 19, lineHeight: 1.35, color: transcricao ? '#2B2724' : '#A89B8C', fontWeight: 300 }}>
+              {transcricao || 'Ex.: "A Maria pagou 300" ou "gastei 50 de gasolina hoje". Toque no círculo ao terminar.'}
+            </div>
+          )}
+          {fase === 'entendendo' && transcricao && <div style={{ marginTop: 16, fontSize: 14, color: '#8C8478', fontStyle: 'italic' }}>“{transcricao}”</div>}
+        </div>
+
+        {erro && (
+          <div className="mono text-[11px] mt-3" style={{ color: '#B4483D' }}>
+            {erro}
+            {fase === 'revisao' && ultimoTextoRef.current && (
+              <div style={{ marginTop: 8 }}>
+                <button type="button" onClick={() => entender(ultimoTextoRef.current)} className="focusable mono text-[11px] font-semibold" style={{ padding: '8px 14px', borderRadius: 999, background: '#2B2724', color: '#FAF8F5', border: 'none' }}>Tentar de novo</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {fase === 'digitar' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+            <textarea rows={4} autoFocus placeholder={'Toque no microfone do teclado e fale. Ex.: "A Maria pagou 300 de sinal e gastei 50 de gasolina"'} value={textoDigitado} onChange={(e) => setTextoDigitado(e.target.value)} className="focusable rounded-xl px-3 py-2 text-sm" style={{ height: 'auto' }} />
+            <button type="button" disabled={!textoDigitado.trim()} onClick={() => { const t = textoDigitado; setTextoDigitado(''); entender(t); }} className="focusable mono text-xs font-semibold px-3 py-3 rounded-xl" style={{ background: '#2B2724', color: '#FAF8F5', opacity: textoDigitado.trim() ? 1 : 0.5 }}>Entender</button>
+          </div>
+        )}
+
+        {(fase === 'revisao' || fase === 'salvo') && acoes.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
+            {acoes.map((a, i) => {
+              const cands = a.tipo === 'pagamento' ? candidatosPagamento(a, financas) : [];
+              const cor = a.tipo === 'gasto' ? '#B4483D' : '#4C7A5E';
+              return (
+                <div key={i} className="av-card" style={{ opacity: a.incluir ? 1 : 0.55 }}>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={a.incluir} onChange={(e) => atualizar(i, { incluir: e.target.checked })} style={{ accentColor: '#4C7A5E', width: 20, height: 20, marginTop: 2, flexShrink: 0 }} />
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div className="mono" style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.08em', color: cor }}>{a.tipo === 'gasto' ? 'GASTO (SAÍDA)' : 'PAGAMENTO RECEBIDO'}</div>
+                      {a.tipo === 'gasto' ? (
+                        <div style={{ fontSize: 15, marginTop: 2 }}>
+                          <b>{a.descricao || 'Descrição?'}</b> · <b>{a.valor > 0 ? moeda(a.valor) : 'Valor?'}</b>
+                          <div style={{ fontSize: 12, color: '#8C8478' }}>{fmtData(a.data)}{a.cliente ? ` · ${a.cliente}` : ''}</div>
+                        </div>
+                      ) : cands.length > 0 ? (
+                        <div style={{ marginTop: 4 }}>
+                          <select value={a.financaId || ''} onChange={(e) => atualizar(i, { financaId: Number(e.target.value) || e.target.value })} className="focusable rounded px-2 py-2 text-sm" style={{ width: '100%', fontSize: 16 }}>
+                            {cands.map((f) => <option key={f.id} value={f.id}>{rotuloParcelaVoz(f)}</option>)}
+                          </select>
+                          <div style={{ fontSize: 12, color: '#8C8478', marginTop: 4 }}>Será marcada como paga.</div>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 13, color: '#B4483D', marginTop: 2 }}>Não achei parcela em aberto para “{a.cliente || '?'}”.</div>
+                      )}
+                    </div>
+                  </label>
+                </div>
+              );
+            })}
+            {duvidas.map((q, i) => <div key={i} className="text-xs" style={{ color: '#8C8478' }}>• {q}</div>)}
+          </div>
+        )}
+
+        {fase === 'revisao' && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16 }}>
+              <button type="button" onClick={() => ouvir()} aria-label="Falar de novo" className="focusable" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, borderRadius: '50%', width: 52, height: 52, background: '#fff', border: '1px solid #E8E3DC', color: '#C39B99' }}><Mic size={22} /></button>
+              <button type="button" onClick={confirmar} disabled={selecionadas.length === 0 || salvando} className="focusable mono text-sm font-semibold" style={{ flex: 1, borderRadius: 999, height: 52, background: '#2B2724', color: '#FAF8F5', opacity: selecionadas.length === 0 || salvando ? 0.5 : 1 }}>
+                {salvando ? 'Salvando…' : `Confirmar${selecionadas.length ? ` (${selecionadas.length})` : ''}`}
+              </button>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 12 }}>
+              <button type="button" onClick={() => setFase('digitar')} className="focusable mono text-[11px] font-semibold underline" style={{ color: '#8C8478' }}>Digitar</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TelaFinanceiro({ financas, gastos, demandas, onCriarLancamento, onAtualizarLancamento, onAtualizarStatus, onExcluirLancamento, onCriarGasto, onExcluirGasto }) {
   const [subAba, setSubAba] = useState('receber');
+  const [assistenteAberto, setAssistenteAberto] = useState(false);
   const [formAberto, setFormAberto] = useState(false);
   const [editandoLancamento, setEditandoLancamento] = useState(null);
   const [form, setForm] = useState(emptyFinanca);
@@ -3674,6 +3933,15 @@ function TelaFinanceiro({ financas, gastos, demandas, onCriarLancamento, onAtual
           </form>
         </div>
       )}
+      {!formAberto && !assistenteAberto && (
+        <>
+          <style>{CSS_ASSISTENTE}</style>
+          <button type="button" className="av-fab" onClick={() => setAssistenteAberto(true)} aria-label="Ditar pagamento ou gasto por voz" title="Ditar pagamento ou gasto"><Mic size={26} /></button>
+        </>
+      )}
+      {assistenteAberto && (
+        <AssistenteVozFinanceiro financas={financas} gastos={gastos} demandas={demandas} onMarcarPago={onAtualizarStatus} onCriarGasto={onCriarGasto} onFechar={() => setAssistenteAberto(false)} />
+      )}
     </div>
   );
 }
@@ -3803,6 +4071,7 @@ function TelaGastos({ gastos, financas, demandas, onCriar, onExcluir }) {
           </form>
         </div>
       )}
+
     </div>
   );
 }
