@@ -2161,6 +2161,8 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
   const recRef = useRef(null);
   const silencioRef = useRef(null);
   const textoRef = useRef('');
+  const finalRef = useRef(false);
+  const inicioRef = useRef(0);
   const ultimoTextoRef = useRef('');
   const rascunhoRef = useRef(rascunho);
   const perguntaRef = useRef('');
@@ -2198,23 +2200,25 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
     }
   }
 
-  function ouvir() {
+  function ouvir(continuacao = false) {
     if (!SR) { setFase('digitar'); return; }
     pararReconhecimento();
     setErro('');
-    textoRef.current = '';
-    setTranscricao('');
+    if (!continuacao) { textoRef.current = ''; setTranscricao(''); inicioRef.current = Date.now(); }
+    finalRef.current = false;
+    const base = continuacao ? textoRef.current : '';
     const rec = new SR();
     rec.lang = 'pt-BR';
     rec.continuous = true;
     rec.interimResults = true;
     rec.onresult = (ev) => {
-      let t = '';
+      let t = base ? base + ' ' : '';
       for (let i = 0; i < ev.results.length; i++) t += ev.results[i][0].transcript + ' ';
       textoRef.current = t.trim();
       setTranscricao(t.trim());
       clearTimeout(silencioRef.current);
-      silencioRef.current = setTimeout(() => { try { rec.stop(); } catch (e) {} }, 1700); // parou de falar
+      // só conclui sozinho após uma pausa longa; o botão também conclui a qualquer momento
+      silencioRef.current = setTimeout(() => { finalRef.current = true; try { rec.stop(); } catch (e) {} }, 6000);
     };
     rec.onerror = (ev) => {
       if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
@@ -2227,8 +2231,12 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
     };
     rec.onend = () => {
       if (recRef.current !== rec) return;
-      recRef.current = null;
       clearTimeout(silencioRef.current);
+      // o navegador encerra a escuta sozinho em pausas/limite: religa e continua acumulando
+      if (!finalRef.current && Date.now() - inicioRef.current < 5 * 60 * 1000) {
+        try { ouvir(true); return; } catch (e) { /* cai para entender */ }
+      }
+      recRef.current = null;
       entender(textoRef.current);
     };
     recRef.current = rec;
@@ -2243,7 +2251,7 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
   }, []);
 
   function aoTocarOrbe() {
-    if (fase === 'ouvindo') { const r = recRef.current; if (r) { try { r.stop(); } catch (e) {} } return; } // concluir
+    if (fase === 'ouvindo') { const r = recRef.current; finalRef.current = true; if (r) { try { r.stop(); } catch (e) {} } return; } // concluir
     if (fase === 'entendendo' || fase === 'salvo') return;
     ouvir();
   }
