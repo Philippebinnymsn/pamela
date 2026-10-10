@@ -2127,8 +2127,61 @@ function problemasDoRascunho(r) {
   if (r.horario && r.horarioTermino && r.horarioTermino <= r.horario) p.push('O horário de término precisa ser depois do início.');
   return p;
 }
+// Gravador de áudio (funciona onde o ditado do navegador não funciona, como o app instalado no iPhone).
+// Captura o microfone, converte para WAV 16 kHz mono e devolve em base64 para a IA transcrever.
+const LIMITE_GRAVACAO_MS = 75000;
+async function iniciarGravacaoWav() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('Este navegador não permite gravar áudio.');
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new Ctx();
+  try { if (ctx.state === 'suspended') await ctx.resume(); } catch (e) {}
+  const fonte = ctx.createMediaStreamSource(stream);
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  const mudo = ctx.createGain();
+  mudo.gain.value = 0;
+  const pedacos = [];
+  proc.onaudioprocess = (e) => { pedacos.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+  fonte.connect(proc); proc.connect(mudo); mudo.connect(ctx.destination);
+  const taxa = ctx.sampleRate;
+  const encerrar = () => {
+    try { proc.onaudioprocess = null; fonte.disconnect(); proc.disconnect(); mudo.disconnect(); } catch (e) {}
+    stream.getTracks().forEach((t) => t.stop());
+    try { ctx.close(); } catch (e) {}
+  };
+  return {
+    cancelar: encerrar,
+    parar: async () => {
+      encerrar();
+      const total = pedacos.reduce((n, c) => n + c.length, 0);
+      const pcm = new Float32Array(total);
+      let o = 0; pedacos.forEach((c) => { pcm.set(c, o); o += c.length; });
+      const alvo = 16000;
+      const razao = taxa / alvo;
+      const n = Math.floor(total / razao);
+      const buf = new ArrayBuffer(44 + n * 2);
+      const v = new DataView(buf);
+      const txt = (pos, t) => { for (let i = 0; i < t.length; i++) v.setUint8(pos + i, t.charCodeAt(i)); };
+      txt(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); txt(8, 'WAVE'); txt(12, 'fmt ');
+      v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, alvo, true); v.setUint32(28, alvo * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+      txt(36, 'data'); v.setUint32(40, n * 2, true);
+      for (let i = 0; i < n; i++) {
+        const ini = Math.floor(i * razao); const fim = Math.max(ini + 1, Math.min(total, Math.floor((i + 1) * razao)));
+        let soma = 0; for (let k = ini; k < fim; k++) soma += pcm[k];
+        const x = Math.max(-1, Math.min(1, soma / (fim - ini)));
+        v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true);
+      }
+      const bytes = new Uint8Array(buf);
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      return btoa(bin);
+    },
+  };
+}
+
 async function interpretarTextoComIA(texto) {
-  const { data, error } = await supabase.functions.invoke('interpretar-atendimento', { body: { texto } });
+  const { data, error } = await supabase.functions.invoke('interpretar-atendimento', { body: typeof texto === 'object' ? texto : { texto } });
   if (error) {
     let detalhe = error.message;
     try { const j = await error.context.json(); if (j && j.erro) detalhe = j.erro; } catch (e) {}
@@ -2149,7 +2202,7 @@ function LinhaResumo({ icone, children }) {
 
 function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
   const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
-  const [fase, setFase] = useState(SR ? 'ouvindo' : 'digitar'); // ouvindo | entendendo | revisao | digitar | salvo
+  const [fase, setFase] = useState('ouvindo'); // ouvindo | entendendo | revisao | digitar | salvo
   const [transcricao, setTranscricao] = useState('');
   const [rascunho, setRascunho] = useState({ ...emptyDemanda });
   const [duvidas, setDuvidas] = useState([]);
@@ -2159,6 +2212,8 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
   const [salvando, setSalvando] = useState(false);
   const [falhouIA, setFalhouIA] = useState(false);
   const recRef = useRef(null);
+  const gravRef = useRef(null);
+  const gravTimerRef = useRef(null);
   const silencioRef = useRef(null);
   const textoRef = useRef('');
   const finalRef = useRef(false);
@@ -2176,16 +2231,18 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
     if (r) { r.onresult = null; r.onend = null; r.onerror = null; try { r.stop(); } catch (e) {} }
   }
 
-  async function entender(texto) {
-    const limpo = String(texto || '').trim();
-    if (!limpo) { setFase(rascunhoRef.current.cliente || rascunhoRef.current.valor ? 'revisao' : (SR ? 'revisao' : 'digitar')); setErro('Não ouvi nada. Toque no microfone e fale de novo.'); return; }
+  async function entender(entrada) {
+    const ehAudio = Boolean(entrada && typeof entrada === 'object');
+    const limpo = ehAudio ? entrada : String(entrada || '').trim();
+    if (!ehAudio && !limpo) { setFase(rascunhoRef.current.cliente || rascunhoRef.current.valor ? 'revisao' : (SR ? 'revisao' : 'digitar')); setErro('Não ouvi nada. Toque no microfone e fale de novo.'); return; }
     ultimoTextoRef.current = limpo;
     setFase('entendendo');
     setErro('');
     setFalhouIA(false);
-    const enviado = perguntaRef.current ? `(Estou respondendo à pergunta "${perguntaRef.current}") ${limpo}` : limpo;
+    const enviado = ehAudio ? { audio: entrada.audio, contexto: perguntaRef.current || '' } : (perguntaRef.current ? `(Estou respondendo à pergunta "${perguntaRef.current}") ${limpo}` : limpo);
     try {
       const dados = await interpretarTextoComIA(enviado);
+      if (dados.transcricao) setTranscricao(dados.transcricao);
       const novo = aplicarDadosDeVoz(rascunhoRef.current, dados);
       setRascunho(novo);
       setDuvidas(Array.isArray(dados.duvidas) ? dados.duvidas.filter(Boolean) : []);
@@ -2200,8 +2257,38 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
     }
   }
 
+  async function gravar() {
+    setErro('');
+    pararReconhecimento();
+    try {
+      gravRef.current = await iniciarGravacaoWav();
+      setFase('gravando');
+      clearTimeout(gravTimerRef.current);
+      gravTimerRef.current = setTimeout(() => pararGravacao(), LIMITE_GRAVACAO_MS);
+    } catch (e) {
+      gravRef.current = null;
+      setErro('Não consegui acessar o microfone. Libere o microfone para este app nos Ajustes do iPhone, ou use o ditado do teclado abaixo.');
+      setFase('digitar');
+    }
+  }
+
+  async function pararGravacao() {
+    clearTimeout(gravTimerRef.current);
+    const g = gravRef.current;
+    gravRef.current = null;
+    if (!g) return;
+    setFase('entendendo');
+    try {
+      const wav = await g.parar();
+      entender({ audio: wav });
+    } catch (e) {
+      setErro('Não consegui gravar: ' + (e.message || e));
+      setFase('digitar');
+    }
+  }
+
   function ouvir(continuacao = false) {
-    if (!SR) { setFase('digitar'); return; }
+    if (!SR) { gravar(); return; }
     pararReconhecimento();
     setErro('');
     if (!continuacao) { textoRef.current = ''; setTranscricao(''); inicioRef.current = Date.now(); }
@@ -2223,8 +2310,7 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
     rec.onerror = (ev) => {
       if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
         recRef.current = null;
-        setErro('O microfone do navegador não está liberado aqui. Use o microfone do teclado na caixa abaixo.');
-        setFase('digitar');
+        gravar();
       } else if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
         setErro('Não consegui ouvir (' + ev.error + '). Tente de novo ou digite.');
       }
@@ -2245,12 +2331,13 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
   }
 
   useEffect(() => {
-    if (SR) ouvir();
-    return () => pararReconhecimento();
+    if (SR) ouvir(); else gravar();
+    return () => { pararReconhecimento(); clearTimeout(gravTimerRef.current); if (gravRef.current) gravRef.current.cancelar(); };
     // eslint-disable-next-line
   }, []);
 
   function aoTocarOrbe() {
+    if (fase === 'gravando') { pararGravacao(); return; }
     if (fase === 'ouvindo') { const r = recRef.current; finalRef.current = true; if (r) { try { r.stop(); } catch (e) {} } return; } // concluir
     if (fase === 'entendendo' || fase === 'salvo') return;
     ouvir();
@@ -2282,6 +2369,7 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
 
   let titulo = 'Ouvindo…';
   if (fase === 'entendendo') titulo = 'Entendendo…';
+  else if (fase === 'gravando') titulo = 'Gravando…';
   else if (fase === 'revisao') titulo = faltas.length > 0 ? 'Quase lá' : 'Tudo certo?';
   else if (fase === 'digitar') titulo = 'Digite ou dite';
   else if (fase === 'salvo') titulo = 'Atendimento criado';
@@ -2297,13 +2385,16 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
 
         <div className="flex flex-col items-center text-center" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', minHeight: fase === 'revisao' ? 0 : 150 }}>
           <div style={{ fontFamily: "'Jost', sans-serif", fontSize: 22, fontWeight: 400, color: '#2B2724', marginTop: 4, marginBottom: 14 }}>{titulo}</div>
-          {(fase === 'ouvindo' || fase === 'entendendo') && (
-            <button type="button" className={`av-orbe ${fase === 'ouvindo' ? 'ouvindo' : ''}`} onClick={aoTocarOrbe} aria-label={fase === 'ouvindo' ? 'Concluir' : 'Falar'}>
-              {fase === 'entendendo' ? <Sparkles size={34} className="av-girar" /> : fase === 'ouvindo' ? <span style={{ width: 22, height: 22, borderRadius: 6, background: '#fff' }} /> : <Mic size={36} />}
+          {(fase === 'ouvindo' || fase === 'gravando' || fase === 'entendendo') && (
+            <button type="button" className={`av-orbe ${(fase === 'ouvindo' || fase === 'gravando') ? 'ouvindo' : ''}`} onClick={aoTocarOrbe} aria-label={(fase === 'ouvindo' || fase === 'gravando') ? 'Concluir' : 'Falar'}>
+              {fase === 'entendendo' ? <Sparkles size={34} className="av-girar" /> : (fase === 'ouvindo' || fase === 'gravando') ? <span style={{ width: 22, height: 22, borderRadius: 6, background: '#fff' }} /> : <Mic size={36} />}
             </button>
           )}
           {fase === 'salvo' && (
             <div className="av-orbe" style={{ background: 'radial-gradient(circle at 30% 28%, #8DB59E 0%, #4C7A5E 100%)', boxShadow: '0 10px 28px rgba(76,122,94,.45)' }}><Check size={42} /></div>
+          )}
+          {fase === 'gravando' && (
+            <div style={{ marginTop: 18, minHeight: 56, fontFamily: "'Jost', sans-serif", fontSize: 19, lineHeight: 1.35, color: '#A89B8C', fontWeight: 300 }}>Gravando seu áudio. Fale com calma e toque no círculo ao terminar.</div>
           )}
           {fase === 'ouvindo' && (
             <div style={{ marginTop: 18, minHeight: 56, fontFamily: "'Jost', sans-serif", fontSize: 19, lineHeight: 1.35, color: transcricao ? '#2B2724' : '#A89B8C', fontWeight: 300 }}>
@@ -2335,6 +2426,7 @@ function AssistenteVoz({ demandas, onCriar, onAbrirFormulario, onFechar }) {
               className="focusable rounded-xl px-3 py-2 text-sm"
               style={{ height: 'auto' }}
             />
+            <button type="button" onClick={gravar} className="focusable mono text-xs font-semibold px-3 py-3 rounded-xl flex items-center justify-center gap-2" style={{ background: '#fff', color: '#2B2724', border: '1px solid #E8E3DC' }}><Mic size={16} /> Gravar áudio</button>
             <button type="button" disabled={!textoDigitado.trim()} onClick={() => { const t = textoDigitado; setTextoDigitado(''); entender(t); }} className="focusable mono text-xs font-semibold px-3 py-3 rounded-xl" style={{ background: '#2B2724', color: '#FAF8F5', opacity: textoDigitado.trim() ? 1 : 0.5 }}>Entender</button>
           </div>
         )}
@@ -3310,7 +3402,7 @@ function candidatosPagamento(acao, financas) {
 const rotuloParcelaVoz = (f) => `${f.cliente} — ${f.projeto}${f.parcelaTotal > 1 ? ` · parcela ${f.parcelaNumero}/${f.parcelaTotal}` : ''} · ${moeda(f.valorBruto ?? f.valor)}${f.dataPagamento ? ` · vence ${fmtData(f.dataPagamento)}` : ''}`;
 
 async function interpretarFinanceiroComIA(texto) {
-  const { data, error } = await supabase.functions.invoke('interpretar-atendimento', { body: { texto, modo: 'financeiro' } });
+  const { data, error } = await supabase.functions.invoke('interpretar-atendimento', { body: { ...(typeof texto === 'object' ? texto : { texto }), modo: 'financeiro' } });
   if (error) {
     let detalhe = error.message;
     try { const j = await error.context.json(); if (j && j.erro) detalhe = j.erro; } catch (e) {}
@@ -3324,7 +3416,7 @@ async function interpretarFinanceiroComIA(texto) {
 
 function AssistenteVozFinanceiro({ financas, gastos, demandas, onMarcarPago, onCriarGasto, onFechar }) {
   const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
-  const [fase, setFase] = useState(SR ? 'ouvindo' : 'digitar'); // ouvindo | entendendo | revisao | digitar | salvo
+  const [fase, setFase] = useState('ouvindo'); // ouvindo | entendendo | revisao | digitar | salvo
   const [transcricao, setTranscricao] = useState('');
   const [textoDigitado, setTextoDigitado] = useState('');
   const [acoes, setAcoes] = useState([]);
@@ -3332,6 +3424,8 @@ function AssistenteVozFinanceiro({ financas, gastos, demandas, onMarcarPago, onC
   const [erro, setErro] = useState('');
   const [salvando, setSalvando] = useState(false);
   const recRef = useRef(null);
+  const gravRef = useRef(null);
+  const gravTimerRef = useRef(null);
   const silencioRef = useRef(null);
   const textoRef = useRef('');
   const finalRef = useRef(false);
@@ -3345,14 +3439,16 @@ function AssistenteVozFinanceiro({ financas, gastos, demandas, onMarcarPago, onC
     if (r) { r.onresult = null; r.onend = null; r.onerror = null; try { r.stop(); } catch (e) {} }
   }
 
-  async function entender(texto) {
-    const limpo = String(texto || '').trim();
-    if (!limpo) { setFase('revisao'); setErro('Não ouvi nada. Toque no microfone e fale de novo.'); return; }
+  async function entender(entrada) {
+    const ehAudio = Boolean(entrada && typeof entrada === 'object');
+    const limpo = ehAudio ? entrada : String(entrada || '').trim();
+    if (!ehAudio && !limpo) { setFase('revisao'); setErro('Não ouvi nada. Toque no microfone e fale de novo.'); return; }
     ultimoTextoRef.current = limpo;
     setFase('entendendo');
     setErro('');
     try {
-      const dados = await interpretarFinanceiroComIA(limpo);
+      const dados = await interpretarFinanceiroComIA(ehAudio ? { audio: entrada.audio } : limpo);
+      if (dados.transcricao) setTranscricao(dados.transcricao);
       const lista = (dados.acoes || []).map((a) => {
         const base = { tipo: a.tipo === 'gasto' ? 'gasto' : 'pagamento', cliente: a.cliente || '', valor: Number(a.valor) || 0, descricao: a.descricao || '', data: a.data || chaveHojeLocal(), incluir: true };
         if (base.tipo === 'pagamento') { const c = candidatosPagamento(base, financas); base.financaId = c[0] ? c[0].id : null; if (!c[0]) base.incluir = false; }
@@ -3368,8 +3464,38 @@ function AssistenteVozFinanceiro({ financas, gastos, demandas, onMarcarPago, onC
     }
   }
 
+  async function gravar() {
+    setErro('');
+    parar();
+    try {
+      gravRef.current = await iniciarGravacaoWav();
+      setFase('gravando');
+      clearTimeout(gravTimerRef.current);
+      gravTimerRef.current = setTimeout(() => pararGravacao(), LIMITE_GRAVACAO_MS);
+    } catch (e) {
+      gravRef.current = null;
+      setErro('Não consegui acessar o microfone. Libere o microfone para este app nos Ajustes do iPhone, ou use o ditado do teclado abaixo.');
+      setFase('digitar');
+    }
+  }
+
+  async function pararGravacao() {
+    clearTimeout(gravTimerRef.current);
+    const g = gravRef.current;
+    gravRef.current = null;
+    if (!g) return;
+    setFase('entendendo');
+    try {
+      const wav = await g.parar();
+      entender({ audio: wav });
+    } catch (e) {
+      setErro('Não consegui gravar: ' + (e.message || e));
+      setFase('digitar');
+    }
+  }
+
   function ouvir(continuacao = false) {
-    if (!SR) { setFase('digitar'); return; }
+    if (!SR) { gravar(); return; }
     parar();
     setErro('');
     if (!continuacao) { textoRef.current = ''; setTranscricao(''); inicioRef.current = Date.now(); }
@@ -3390,8 +3516,7 @@ function AssistenteVozFinanceiro({ financas, gastos, demandas, onMarcarPago, onC
     rec.onerror = (ev) => {
       if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
         recRef.current = null;
-        setErro('O microfone do navegador não está liberado aqui. Use o microfone do teclado na caixa abaixo.');
-        setFase('digitar');
+        gravar();
       } else if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
         setErro('Não consegui ouvir (' + ev.error + '). Tente de novo ou digite.');
       }
@@ -3411,12 +3536,13 @@ function AssistenteVozFinanceiro({ financas, gastos, demandas, onMarcarPago, onC
   }
 
   useEffect(() => {
-    if (SR) ouvir();
-    return () => parar();
+    if (SR) ouvir(); else gravar();
+    return () => { parar(); clearTimeout(gravTimerRef.current); if (gravRef.current) gravRef.current.cancelar(); };
     // eslint-disable-next-line
   }, []);
 
   function aoTocarOrbe() {
+    if (fase === 'gravando') { pararGravacao(); return; }
     if (fase === 'ouvindo') { const r = recRef.current; finalRef.current = true; if (r) { try { r.stop(); } catch (e) {} } return; }
     if (fase === 'entendendo' || fase === 'salvo') return;
     ouvir();
@@ -3449,6 +3575,7 @@ function AssistenteVozFinanceiro({ financas, gastos, demandas, onMarcarPago, onC
 
   let titulo = 'Ouvindo…';
   if (fase === 'entendendo') titulo = 'Entendendo…';
+  else if (fase === 'gravando') titulo = 'Gravando…';
   else if (fase === 'revisao') titulo = acoes.length ? 'Tudo certo?' : 'Tente de novo';
   else if (fase === 'digitar') titulo = 'Digite ou dite';
   else if (fase === 'salvo') titulo = 'Financeiro atualizado';
@@ -3464,12 +3591,15 @@ function AssistenteVozFinanceiro({ financas, gastos, demandas, onMarcarPago, onC
 
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', minHeight: fase === 'revisao' ? 0 : 150 }}>
           <div style={{ fontFamily: "'Jost', sans-serif", fontSize: 22, fontWeight: 400, color: '#2B2724', marginTop: 4, marginBottom: 14 }}>{titulo}</div>
-          {(fase === 'ouvindo' || fase === 'entendendo') && (
-            <button type="button" className={`av-orbe ${fase === 'ouvindo' ? 'ouvindo' : ''}`} onClick={aoTocarOrbe} aria-label={fase === 'ouvindo' ? 'Concluir' : 'Falar'}>
+          {(fase === 'ouvindo' || fase === 'gravando' || fase === 'entendendo') && (
+            <button type="button" className={`av-orbe ${(fase === 'ouvindo' || fase === 'gravando') ? 'ouvindo' : ''}`} onClick={aoTocarOrbe} aria-label={(fase === 'ouvindo' || fase === 'gravando') ? 'Concluir' : 'Falar'}>
               {fase === 'entendendo' ? <Sparkles size={34} className="av-girar" /> : <span style={{ width: 22, height: 22, borderRadius: 6, background: '#fff' }} />}
             </button>
           )}
           {fase === 'salvo' && <div className="av-orbe" style={{ background: 'radial-gradient(circle at 30% 28%, #8DB59E 0%, #4C7A5E 100%)', boxShadow: '0 10px 28px rgba(76,122,94,.45)' }}><Check size={42} /></div>}
+          {fase === 'gravando' && (
+            <div style={{ marginTop: 18, minHeight: 56, fontFamily: "'Jost', sans-serif", fontSize: 19, lineHeight: 1.35, color: '#A89B8C', fontWeight: 300 }}>Gravando seu áudio. Fale com calma e toque no círculo ao terminar.</div>
+          )}
           {fase === 'ouvindo' && (
             <div style={{ marginTop: 18, minHeight: 56, fontFamily: "'Jost', sans-serif", fontSize: 19, lineHeight: 1.35, color: transcricao ? '#2B2724' : '#A89B8C', fontWeight: 300 }}>
               {transcricao || 'Ex.: "A Maria pagou 300" ou "gastei 50 de gasolina hoje". Toque no círculo ao terminar.'}
@@ -3492,6 +3622,7 @@ function AssistenteVozFinanceiro({ financas, gastos, demandas, onMarcarPago, onC
         {fase === 'digitar' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
             <textarea rows={4} autoFocus placeholder={'Toque no microfone do teclado e fale. Ex.: "A Maria pagou 300 de sinal e gastei 50 de gasolina"'} value={textoDigitado} onChange={(e) => setTextoDigitado(e.target.value)} className="focusable rounded-xl px-3 py-2 text-sm" style={{ height: 'auto' }} />
+            <button type="button" onClick={gravar} className="focusable mono text-xs font-semibold px-3 py-3 rounded-xl flex items-center justify-center gap-2" style={{ background: '#fff', color: '#2B2724', border: '1px solid #E8E3DC' }}><Mic size={16} /> Gravar áudio</button>
             <button type="button" disabled={!textoDigitado.trim()} onClick={() => { const t = textoDigitado; setTextoDigitado(''); entender(t); }} className="focusable mono text-xs font-semibold px-3 py-3 rounded-xl" style={{ background: '#2B2724', color: '#FAF8F5', opacity: textoDigitado.trim() ? 1 : 0.5 }}>Entender</button>
           </div>
         )}
