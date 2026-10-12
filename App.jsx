@@ -816,10 +816,20 @@ function diasDesde(chave) {
 export default function App() {
   const [aba, setAba] = useState('demandas');
   const [pedidoAbrir, setPedidoAbrir] = useState(null);
+  const [lembretesEnviados, setLembretesEnviados] = useState(() => { try { return JSON.parse(localStorage.getItem('pamela-lembretes-enviados') || '[]'); } catch (e) { return []; } });
+  function marcarLembreteEnviado(chave, enviado) {
+    setLembretesEnviados((prev) => {
+      const novo = enviado ? (prev.includes(chave) ? prev : [...prev, chave].slice(-400)) : prev.filter((c) => c !== chave);
+      try { localStorage.setItem('pamela-lembretes-enviados', JSON.stringify(novo)); } catch (e) {}
+      return novo;
+    });
+  }
   const [textoLembrete, setTextoLembrete] = useState(() => { try { return localStorage.getItem('pamela-texto-lembrete') || null; } catch (e) { return null; } });
   const [demandas, setDemandas] = useState(seedDemandas);
   const [financas, setFinancas] = useState(seedFinancas);
   const [gastos, setGastos] = useState(seedGastos);
+  // Lembretes de amanhã que ainda não foram enviados (número do alerta na aba).
+  const lembretesPendentes = demandas.reduce((total, d) => total + datasDaDemanda(d).filter((dia) => dia && diasRestantes(dia) === 1 && !lembretesEnviados.includes(`${d.id}|${dia}`)).length, 0);
   const [carregado, setCarregado] = useState(false);
   const [session, setSession] = useState(null);
   const [authCarregado, setAuthCarregado] = useState(false);
@@ -1613,6 +1623,16 @@ export default function App() {
         </div>
 
         <div className="flex items-center justify-between gap-2 flex-wrap">
+          <style>{`
+            @keyframes lb-anel { 0% { transform: scale(1); opacity: .65; } 80%, 100% { transform: scale(2.4); opacity: 0; } }
+            @keyframes lb-pulso { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.14); } }
+            @keyframes lb-balanca { 0%, 55%, 100% { transform: rotate(0); } 10%, 30% { transform: rotate(-16deg); } 20%, 40% { transform: rotate(16deg); } }
+            .lb-pin { position: absolute; top: -8px; right: -6px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+            .lb-anel { position: absolute; inset: 0; border-radius: 50%; background: #D64545; animation: lb-anel 1.6s ease-out infinite; }
+            .lb-num { position: relative; min-width: 20px; height: 20px; padding: 0 5px; box-sizing: border-box; border-radius: 999px; background: #D64545; color: #fff; border: 2px solid #FAF8F5; font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; animation: lb-pulso 1.6s ease-in-out infinite; }
+            .lb-balanca { animation: lb-balanca 2.4s ease-in-out infinite; transform-origin: 50% 20%; }
+            @media (prefers-reduced-motion: reduce) { .lb-anel, .lb-num, .lb-balanca { animation: none; } }
+          `}</style>
           <nav className="flex gap-1 p-1 rounded flex-wrap" style={{ background: '#FFFFFF', border: '1px solid #E8E3DC' }}>
             {[
               { key: 'demandas', label: 'Atendimentos', icon: LayoutGrid },
@@ -1624,9 +1644,15 @@ export default function App() {
                 key={key}
                 onClick={() => setAba(key)}
                 className="focusable nav-tab flex items-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 rounded text-[13px] sm:text-base"
-                style={{ background: aba === key ? '#C39B99' : 'transparent', color: aba === key ? '#2B2724' : '#8C8478', fontWeight: aba === key ? 500 : 400 }}
+                style={{ position: 'relative', background: aba === key ? '#C39B99' : 'transparent', color: aba === key ? '#2B2724' : '#8C8478', fontWeight: aba === key ? 500 : 400 }}
               >
-                <Icon size={14} /> {label}
+                <span className={key === 'lembretes' && lembretesPendentes > 0 ? 'lb-balanca' : undefined} style={{ display: 'inline-flex' }}><Icon size={14} /></span> {label}
+                {key === 'lembretes' && lembretesPendentes > 0 && (
+                  <span className="lb-pin" aria-label={`${lembretesPendentes} lembrete(s) para enviar`}>
+                    <span className="lb-anel" />
+                    <span className="lb-num">{lembretesPendentes > 9 ? '9+' : lembretesPendentes}</span>
+                  </span>
+                )}
               </button>
             ))}
           </nav>
@@ -1635,7 +1661,7 @@ export default function App() {
       </div>
 
       <TelaDemandas somenteModais={aba !== 'demandas'} pedidoAbrir={pedidoAbrir} demandas={demandas} financas={financas} gastos={gastos} onCriar={criarDemanda} onAtualizar={atualizarDemanda} onExcluir={excluirDemanda} onAlternarConcluido={alternarServicoConcluido} />
-      {aba === 'lembretes' && <TelaLembretes demandas={demandas} financas={financas} textoSalvo={textoLembrete} onSalvarTexto={salvarTextoLembrete} onSalvarTelefone={salvarTelefone} />}
+      {aba === 'lembretes' && <TelaLembretes demandas={demandas} financas={financas} textoSalvo={textoLembrete} onSalvarTexto={salvarTextoLembrete} onSalvarTelefone={salvarTelefone} enviados={lembretesEnviados} onMarcarEnviado={marcarLembreteEnviado} />}
       {aba === 'agenda' && <TelaAgenda demandas={demandas} financas={financas} onAbrirAtendimento={(id) => setPedidoAbrir({ id, ts: Date.now() })} />}
       {aba === 'financeiro' && <TelaFinanceiro financas={financas} gastos={gastos} demandas={demandas} onCriarLancamento={criarLancamento} onAtualizarLancamento={atualizarLancamento} onAtualizarStatus={atualizarStatusPagamento} onExcluirLancamento={excluirLancamento} onCriarGasto={criarGasto} onExcluirGasto={excluirGasto} />}
     </div>
@@ -3163,11 +3189,10 @@ function telefoneParaWhatsapp(t) {
   return n;
 }
 
-function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvarTelefone }) {
+function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvarTelefone, enviados, onMarcarEnviado }) {
   const [texto, setTexto] = useState(textoSalvo || TEXTO_LEMBRETE_PADRAO);
   const [aviso, setAviso] = useState('');
   const [filtro, setFiltro] = useState('amanha');
-  const [enviados, setEnviados] = useState(() => { try { return JSON.parse(localStorage.getItem('pamela-lembretes-enviados') || '[]'); } catch (e) { return []; } });
   const [editandoTel, setEditandoTel] = useState(null);
   const [telDigitado, setTelDigitado] = useState('');
   const areaRef = useRef(null);
@@ -3210,20 +3235,8 @@ function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvar
     setTimeout(() => setAviso(''), 4000);
   }
 
-  function marcarEnviado(chave) {
-    setEnviados((prev) => {
-      const novo = prev.includes(chave) ? prev : [...prev, chave].slice(-400);
-      try { localStorage.setItem('pamela-lembretes-enviados', JSON.stringify(novo)); } catch (e) {}
-      return novo;
-    });
-  }
-  function desmarcarEnviado(chave) {
-    setEnviados((prev) => {
-      const novo = prev.filter((c) => c !== chave);
-      try { localStorage.setItem('pamela-lembretes-enviados', JSON.stringify(novo)); } catch (e) {}
-      return novo;
-    });
-  }
+  const marcarEnviado = (chave) => onMarcarEnviado(chave, true);
+  const desmarcarEnviado = (chave) => onMarcarEnviado(chave, false);
 
   async function salvarTel(d) {
     const ok = await onSalvarTelefone(d, telDigitado.trim());
@@ -3234,24 +3247,6 @@ function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvar
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div className="card rounded-lg p-4 md:p-5">
-        <div className="mono text-xs tracking-widest mb-1" style={{ color: '#8C8478' }}>TEXTO BASE DO LEMBRETE</div>
-        <p className="text-xs mb-3" style={{ color: '#8C8478' }}>Toque num campo para inserir no texto. Ele é trocado pelos dados do atendimento; se algum dado não estiver cadastrado, a linha é omitida.</p>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-          {CAMPOS_LEMBRETE.map(([k, rotulo]) => (
-            <button key={k} type="button" onClick={() => inserirCampo(k)} className="focusable mono" style={{ fontSize: 11, fontWeight: 600, padding: '6px 10px', borderRadius: 999, border: '1px solid #E8E3DC', background: '#fff', color: '#8C5F5C' }}>+ {rotulo}</button>
-          ))}
-        </div>
-        <textarea ref={areaRef} rows={9} value={texto} onChange={(e) => setTexto(e.target.value)} className="focusable rounded-lg px-3 py-2" style={{ width: '100%', height: 'auto', fontSize: 16, lineHeight: 1.45 }} aria-label="Texto base do lembrete" />
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginTop: 10 }}>
-          <button type="button" onClick={salvarTexto} disabled={!alterado} className="focusable mono text-sm font-semibold px-4 py-2 rounded" style={{ background: '#C39B99', color: '#2B2724', opacity: alterado ? 1 : 0.5 }}>Salvar texto</button>
-          <button type="button" onClick={() => setTexto(TEXTO_LEMBRETE_PADRAO)} className="focusable mono text-[11px] font-semibold underline" style={{ color: '#8C8478' }}>Voltar ao texto original</button>
-          {aviso && <span className="mono text-[11px]" style={{ color: '#4C7A5E' }}>{aviso}</span>}
-        </div>
-        <div className="mono text-[11px] tracking-widest mt-4 mb-2" style={{ color: '#8C8478' }}>PRÉVIA{exemplo ? ` · ${exemplo.d.cliente}` : ''}</div>
-        <div style={{ background: '#E7F3E3', border: '1px solid #CFE3C9', borderRadius: '14px 14px 14px 4px', padding: '10px 12px', whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.45, color: '#2B2724' }}>{previa || '—'}</div>
-      </div>
-
       <div className="card rounded-lg p-4 md:p-5">
         <div className="mono text-xs tracking-widest mb-3" style={{ color: '#8C8478' }}>QUEM AVISAR</div>
         <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -3297,6 +3292,24 @@ function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvar
             );
           })}
         </div>
+      </div>
+
+      <div className="card rounded-lg p-4 md:p-5">
+        <div className="mono text-xs tracking-widest mb-1" style={{ color: '#8C8478' }}>TEXTO BASE DO LEMBRETE</div>
+        <p className="text-xs mb-3" style={{ color: '#8C8478' }}>Toque num campo para inserir no texto. Ele é trocado pelos dados do atendimento; se algum dado não estiver cadastrado, a linha é omitida.</p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+          {CAMPOS_LEMBRETE.map(([k, rotulo]) => (
+            <button key={k} type="button" onClick={() => inserirCampo(k)} className="focusable mono" style={{ fontSize: 11, fontWeight: 600, padding: '6px 10px', borderRadius: 999, border: '1px solid #E8E3DC', background: '#fff', color: '#8C5F5C' }}>+ {rotulo}</button>
+          ))}
+        </div>
+        <textarea ref={areaRef} rows={9} value={texto} onChange={(e) => setTexto(e.target.value)} className="focusable rounded-lg px-3 py-2" style={{ width: '100%', height: 'auto', fontSize: 16, lineHeight: 1.45 }} aria-label="Texto base do lembrete" />
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginTop: 10 }}>
+          <button type="button" onClick={salvarTexto} disabled={!alterado} className="focusable mono text-sm font-semibold px-4 py-2 rounded" style={{ background: '#C39B99', color: '#2B2724', opacity: alterado ? 1 : 0.5 }}>Salvar texto</button>
+          <button type="button" onClick={() => setTexto(TEXTO_LEMBRETE_PADRAO)} className="focusable mono text-[11px] font-semibold underline" style={{ color: '#8C8478' }}>Voltar ao texto original</button>
+          {aviso && <span className="mono text-[11px]" style={{ color: '#4C7A5E' }}>{aviso}</span>}
+        </div>
+        <div className="mono text-[11px] tracking-widest mt-4 mb-2" style={{ color: '#8C8478' }}>PRÉVIA{exemplo ? ` · ${exemplo.d.cliente}` : ''}</div>
+        <div style={{ background: '#E7F3E3', border: '1px solid #CFE3C9', borderRadius: '14px 14px 14px 4px', padding: '10px 12px', whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.45, color: '#2B2724' }}>{previa || '—'}</div>
       </div>
     </div>
   );
