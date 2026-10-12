@@ -238,6 +238,7 @@ function mapDemandaDoBanco(row) {
     contratoPath: row.contrato_path || null,
     contratoNome: row.contrato_nome || '',
     contratoTipo: row.contrato_tipo || '',
+    telefone: row.telefone || '',
     status: row.status,
     dataGravacao: row.data_gravacao,
     datasGravacao: row.datas_gravacao || [],
@@ -281,7 +282,7 @@ function mapGastoDoBanco(row) {
   };
 }
 
-const emptyDemanda = { cliente: '', projeto: '', etapa: 'Atendimento', prazo: '', horario: '', horarioTermino: '', status: 'pre_reserva', dataGravacao: null, datasGravacao: [], descricao: '', endereco: '', noEstudio: false, maisDeUmaPessoa: false, quantidadePessoas: 1, valorDeslocamento: '', extras: [], valor: '', temSinal: false, valorSinal: '', dataSinal: '', comNF: false, dataPagamento: '', parcelado: false, parcelas: [], contratoArquivo: null, contratoNome: '', removerContrato: false };
+const emptyDemanda = { telefone: '', cliente: '', projeto: '', etapa: 'Atendimento', prazo: '', horario: '', horarioTermino: '', status: 'pre_reserva', dataGravacao: null, datasGravacao: [], descricao: '', endereco: '', noEstudio: false, maisDeUmaPessoa: false, quantidadePessoas: 1, valorDeslocamento: '', extras: [], valor: '', temSinal: false, valorSinal: '', dataSinal: '', comNF: false, dataPagamento: '', parcelado: false, parcelas: [], contratoArquivo: null, contratoNome: '', removerContrato: false };
 const emptyFinanca = { cliente: '', projeto: '', valor: '', dataTrabalho: '', dataPagamento: '', pago: false, parcelado: false, parcelas: [] };
 const emptyGasto = { projeto: '', cliente: '', descricao: '', valor: '', data: '' };
 
@@ -815,6 +816,7 @@ function diasDesde(chave) {
 export default function App() {
   const [aba, setAba] = useState('demandas');
   const [pedidoAbrir, setPedidoAbrir] = useState(null);
+  const [textoLembrete, setTextoLembrete] = useState(() => { try { return localStorage.getItem('pamela-texto-lembrete') || null; } catch (e) { return null; } });
   const [demandas, setDemandas] = useState(seedDemandas);
   const [financas, setFinancas] = useState(seedFinancas);
   const [gastos, setGastos] = useState(seedGastos);
@@ -1187,6 +1189,29 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    if (!session || !supabaseConfigurado) return;
+    (async () => {
+      const { data, error } = await supabase.from('configuracoes').select('valor').eq('chave', 'lembrete_whatsapp').maybeSingle();
+      if (!error && data && data.valor != null) setTextoLembrete(data.valor);
+    })();
+  }, [session]);
+
+  // Guarda o texto base do lembrete (no Supabase; se a tabela ainda não existir, só neste aparelho).
+  async function salvarTextoLembrete(texto) {
+    try { localStorage.setItem('pamela-texto-lembrete', texto); } catch (e) {}
+    setTextoLembrete(texto);
+    const { error } = await supabase.from('configuracoes').upsert({ chave: 'lembrete_whatsapp', valor: texto, atualizado_em: new Date().toISOString() }, { onConflict: 'user_id,chave' });
+    return !error;
+  }
+
+  async function salvarTelefone(demanda, telefone) {
+    const { error } = await supabase.from('demandas').update({ telefone }).eq('id', demanda.id);
+    if (error) { alert('Não foi possível salvar o telefone: ' + error.message + '\n\nRode o SQL de lembretes (supabase-migracao-lembretes.sql) no Supabase.'); return false; }
+    setDemandas((prev) => prev.map((d) => (d.id === demanda.id ? { ...d, telefone } : d)));
+    return true;
+  }
+
   async function criarDemanda(form) {
     const valorBruto = Number(form.valor);
     const { data: demandaInserida, error: erroDemanda } = await supabase
@@ -1208,6 +1233,7 @@ export default function App() {
         quantidade_pessoas: Number(form.quantidadePessoas) || 1,
         valor: valorBruto,
         com_nf: form.comNF,
+        ...(form.telefone ? { telefone: form.telefone.trim() } : {}),
       })
       .select()
       .single();
@@ -1259,6 +1285,7 @@ export default function App() {
         quantidade_pessoas: Number(form.quantidadePessoas) || 1,
         valor: valorBruto,
         com_nf: form.comNF,
+        ...((form.telefone || (demandas.find((d) => d.id === id) || {}).telefone) ? { telefone: (form.telefone || '').trim() } : {}),
       })
       .eq('id', id);
     if (erroDemanda) { alert('Erro ao atualizar o atendimento: ' + erroDemanda.message); return; }
@@ -1591,6 +1618,7 @@ export default function App() {
               { key: 'demandas', label: 'Atendimentos', icon: LayoutGrid },
               { key: 'agenda', label: 'Agenda', icon: CalendarIcon },
               { key: 'financeiro', label: 'Financeiro', icon: Wallet },
+              { key: 'lembretes', label: 'Lembretes', icon: MessageCircle },
             ].map(({ key, label, icon: Icon }) => (
               <button
                 key={key}
@@ -1607,6 +1635,7 @@ export default function App() {
       </div>
 
       <TelaDemandas somenteModais={aba !== 'demandas'} pedidoAbrir={pedidoAbrir} demandas={demandas} financas={financas} gastos={gastos} onCriar={criarDemanda} onAtualizar={atualizarDemanda} onExcluir={excluirDemanda} onAlternarConcluido={alternarServicoConcluido} />
+      {aba === 'lembretes' && <TelaLembretes demandas={demandas} financas={financas} textoSalvo={textoLembrete} onSalvarTexto={salvarTextoLembrete} onSalvarTelefone={salvarTelefone} />}
       {aba === 'agenda' && <TelaAgenda demandas={demandas} financas={financas} onAbrirAtendimento={(id) => setPedidoAbrir({ id, ts: Date.now() })} />}
       {aba === 'financeiro' && <TelaFinanceiro financas={financas} gastos={gastos} demandas={demandas} onCriarLancamento={criarLancamento} onAtualizarLancamento={atualizarLancamento} onAtualizarStatus={atualizarStatusPagamento} onExcluirLancamento={excluirLancamento} onCriarGasto={criarGasto} onExcluirGasto={excluirGasto} />}
     </div>
@@ -2565,6 +2594,7 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
     const restantes = financasVinculadas.filter((f) => !f.eSinal);
     const parcelado = restantes.length > 1;
     const formEdicao = {
+      telefone: demanda.telefone || '',
       cliente: demanda.cliente,
       projeto: demanda.projeto,
       etapa: demanda.etapa,
@@ -2870,6 +2900,7 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
             </div>
             <div className="flex flex-col gap-3">
               <input required placeholder="Cliente" value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} className="focusable rounded px-3 py-2 text-sm" />
+              <input type="tel" inputMode="tel" placeholder="WhatsApp da cliente (com DDD) — para o lembrete" value={form.telefone || ''} onChange={(e) => setForm({ ...form, telefone: e.target.value })} className="focusable rounded px-3 py-2 text-sm" />
               <select required value={form.projeto} onChange={(e) => setForm({ ...form, projeto: e.target.value })} className="focusable rounded px-3 py-2 text-sm">
                 <option value="">Selecione o serviço</option>
                 {SERVICOS.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -3068,6 +3099,207 @@ function expandirIntervalo(inicio, fim) {
   return chaves;
 }
 const emptyEvento = { titulo: '', cliente: '', tipo: 'gravacao', descricao: '', diaTodo: true, dataInicio: '', dataFim: '', horaInicio: '', horaFim: '', datasSelecionadas: [] };
+
+// ---------- Lembretes por WhatsApp ----------
+const TEXTO_LEMBRETE_PADRAO = `Oi, {cliente}! 💛
+Passando para lembrar do seu atendimento de {servico}:
+📅 {dia_semana}, {data}
+⏰ {horario}
+📍 {local}
+Qualquer imprevisto, é só me avisar por aqui. Até lá!
+Pâmela Mees Penteados`;
+
+const CAMPOS_LEMBRETE = [
+  ['cliente', 'Cliente'],
+  ['servico', 'Serviço'],
+  ['data', 'Data'],
+  ['dia_semana', 'Dia da semana'],
+  ['horario', 'Horário (início e fim)'],
+  ['horario_inicio', 'Só a hora de início'],
+  ['local', 'Local'],
+  ['valor_pendente', 'Valor pendente'],
+];
+
+function valoresLembrete(d, dataStr, financas) {
+  const pendente = financas.filter((f) => f.origemDemandaId === d.id && !f.pago).reduce((t, f) => t + (f.valorBruto ?? f.valor), 0);
+  return {
+    cliente: d.cliente || '',
+    servico: d.projeto || '',
+    data: dataStr ? fmtData(dataStr) : '',
+    dia_semana: dataStr ? DIAS_SEMANA_EXTENSO[new Date(dataStr + 'T00:00:00').getDay()] : '',
+    horario: d.horario ? textoHorario(d.horario, d.horarioTermino) : '',
+    horario_inicio: d.horario ? hhmm(d.horario) : '',
+    local: d.noEstudio ? 'No estúdio' : (d.endereco || ''),
+    valor_pendente: pendente > 0 ? moeda(pendente) : '',
+  };
+}
+
+// Preenche o texto base. Linhas cujo dado não existe no cadastro (ex.: sem horário) são omitidas.
+function montarMensagemLembrete(modelo, d, dataStr, financas) {
+  const v = valoresLembrete(d, dataStr, financas);
+  return String(modelo || '')
+    .split('\n')
+    .map((linha) => {
+      let faltou = false;
+      const pronta = linha.replace(/\{(\w+)\}/g, (m, k) => {
+        if (!(k in v)) return m;
+        if (!v[k]) faltou = true;
+        return v[k];
+      });
+      return faltou ? null : pronta;
+    })
+    .filter((l) => l !== null)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function telefoneParaWhatsapp(t) {
+  const n = String(t || '').replace(/\D/g, '');
+  if (!n) return '';
+  if (n.startsWith('55') && n.length >= 12) return n;
+  if (n.length === 10 || n.length === 11) return '55' + n;
+  return n;
+}
+
+function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvarTelefone }) {
+  const [texto, setTexto] = useState(textoSalvo || TEXTO_LEMBRETE_PADRAO);
+  const [aviso, setAviso] = useState('');
+  const [filtro, setFiltro] = useState('amanha');
+  const [enviados, setEnviados] = useState(() => { try { return JSON.parse(localStorage.getItem('pamela-lembretes-enviados') || '[]'); } catch (e) { return []; } });
+  const [editandoTel, setEditandoTel] = useState(null);
+  const [telDigitado, setTelDigitado] = useState('');
+  const areaRef = useRef(null);
+
+  useEffect(() => { if (textoSalvo) setTexto(textoSalvo); }, [textoSalvo]);
+
+  const alterado = texto !== (textoSalvo || TEXTO_LEMBRETE_PADRAO);
+
+  const itens = useMemo(() => {
+    const lista = [];
+    demandas.forEach((d) => {
+      datasDaDemanda(d).filter(Boolean).forEach((dia) => {
+        const dias = diasRestantes(dia);
+        if (dias < 0) return;
+        if (filtro === 'amanha' && dias !== 1) return;
+        if (filtro === 'semana' && dias > 7) return;
+        lista.push({ d, dia, dias, chave: `${d.id}|${dia}` });
+      });
+    });
+    return lista.sort((a, b) => a.dia.localeCompare(b.dia) || String(a.d.horario || '').localeCompare(String(b.d.horario || '')));
+  }, [demandas, filtro]);
+
+  const exemplo = itens[0] || (() => { const d = demandas.find((x) => datasDaDemanda(x).some((dia) => diasRestantes(dia) >= 0)) || demandas[0]; return d ? { d, dia: datasDaDemanda(d).filter(Boolean).find((x) => diasRestantes(x) >= 0) || datasDaDemanda(d)[0] } : null; })();
+  const previa = exemplo ? montarMensagemLembrete(texto, exemplo.d, exemplo.dia, financas) : montarMensagemLembrete(texto, { id: 0, cliente: 'Maria', projeto: 'Noiva', horario: '14:00', horarioTermino: '18:00', endereco: 'Rua das Flores, 100' }, chaveHojeLocal(), []);
+
+  function inserirCampo(chave) {
+    const el = areaRef.current;
+    const ins = `{${chave}}`;
+    if (!el) { setTexto(texto + ins); return; }
+    const ini = el.selectionStart ?? texto.length;
+    const fim = el.selectionEnd ?? texto.length;
+    const novo = texto.slice(0, ini) + ins + texto.slice(fim);
+    setTexto(novo);
+    setTimeout(() => { try { el.focus(); el.setSelectionRange(ini + ins.length, ini + ins.length); } catch (e) {} }, 0);
+  }
+
+  async function salvarTexto() {
+    const ok = await onSalvarTexto(texto);
+    setAviso(ok ? 'Texto salvo.' : 'Salvo só neste aparelho (rode o SQL de lembretes no Supabase para sincronizar entre aparelhos).');
+    setTimeout(() => setAviso(''), 4000);
+  }
+
+  function marcarEnviado(chave) {
+    setEnviados((prev) => {
+      const novo = prev.includes(chave) ? prev : [...prev, chave].slice(-400);
+      try { localStorage.setItem('pamela-lembretes-enviados', JSON.stringify(novo)); } catch (e) {}
+      return novo;
+    });
+  }
+  function desmarcarEnviado(chave) {
+    setEnviados((prev) => {
+      const novo = prev.filter((c) => c !== chave);
+      try { localStorage.setItem('pamela-lembretes-enviados', JSON.stringify(novo)); } catch (e) {}
+      return novo;
+    });
+  }
+
+  async function salvarTel(d) {
+    const ok = await onSalvarTelefone(d, telDigitado.trim());
+    if (ok) { setEditandoTel(null); setTelDigitado(''); }
+  }
+
+  const rotuloDia = (dias) => (dias === 0 ? 'Hoje' : dias === 1 ? 'Amanhã' : `Em ${dias} dias`);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className="card rounded-lg p-4 md:p-5">
+        <div className="mono text-xs tracking-widest mb-1" style={{ color: '#8C8478' }}>TEXTO BASE DO LEMBRETE</div>
+        <p className="text-xs mb-3" style={{ color: '#8C8478' }}>Toque num campo para inserir no texto. Ele é trocado pelos dados do atendimento; se algum dado não estiver cadastrado, a linha é omitida.</p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+          {CAMPOS_LEMBRETE.map(([k, rotulo]) => (
+            <button key={k} type="button" onClick={() => inserirCampo(k)} className="focusable mono" style={{ fontSize: 11, fontWeight: 600, padding: '6px 10px', borderRadius: 999, border: '1px solid #E8E3DC', background: '#fff', color: '#8C5F5C' }}>+ {rotulo}</button>
+          ))}
+        </div>
+        <textarea ref={areaRef} rows={9} value={texto} onChange={(e) => setTexto(e.target.value)} className="focusable rounded-lg px-3 py-2" style={{ width: '100%', height: 'auto', fontSize: 16, lineHeight: 1.45 }} aria-label="Texto base do lembrete" />
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginTop: 10 }}>
+          <button type="button" onClick={salvarTexto} disabled={!alterado} className="focusable mono text-sm font-semibold px-4 py-2 rounded" style={{ background: '#C39B99', color: '#2B2724', opacity: alterado ? 1 : 0.5 }}>Salvar texto</button>
+          <button type="button" onClick={() => setTexto(TEXTO_LEMBRETE_PADRAO)} className="focusable mono text-[11px] font-semibold underline" style={{ color: '#8C8478' }}>Voltar ao texto original</button>
+          {aviso && <span className="mono text-[11px]" style={{ color: '#4C7A5E' }}>{aviso}</span>}
+        </div>
+        <div className="mono text-[11px] tracking-widest mt-4 mb-2" style={{ color: '#8C8478' }}>PRÉVIA{exemplo ? ` · ${exemplo.d.cliente}` : ''}</div>
+        <div style={{ background: '#E7F3E3', border: '1px solid #CFE3C9', borderRadius: '14px 14px 14px 4px', padding: '10px 12px', whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.45, color: '#2B2724' }}>{previa || '—'}</div>
+      </div>
+
+      <div className="card rounded-lg p-4 md:p-5">
+        <div className="mono text-xs tracking-widest mb-3" style={{ color: '#8C8478' }}>QUEM AVISAR</div>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+          {[['amanha', 'Amanhã'], ['semana', 'Próximos 7 dias'], ['todos', 'Todos futuros']].map(([k, r]) => (
+            <button key={k} type="button" onClick={() => setFiltro(k)} className="focusable mono" style={{ fontSize: 12, fontWeight: 600, padding: '7px 12px', borderRadius: 999, border: '1px solid ' + (filtro === k ? '#C39B99' : '#E8E3DC'), background: filtro === k ? '#C39B99' : '#fff', color: filtro === k ? '#2B2724' : '#8C8478' }}>{r}</button>
+          ))}
+        </div>
+        {itens.length === 0 && <p className="text-sm" style={{ color: '#8C8478' }}>Nenhum atendimento neste período.</p>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {itens.map(({ d, dia, dias, chave }) => {
+            const tel = telefoneParaWhatsapp(d.telefone);
+            const enviado = enviados.includes(chave);
+            const msg = montarMensagemLembrete(texto, d, dia, financas);
+            const link = tel ? `https://wa.me/${tel}?text=${encodeURIComponent(msg)}` : undefined;
+            return (
+              <div key={chave} style={{ border: '1px solid #EFEAE3', borderRadius: 12, padding: 12, background: enviado ? '#F4F8F4' : '#fff' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15 }}>{d.cliente}</div>
+                    <div className="text-xs" style={{ color: '#8C8478' }}>{d.projeto} · {fmtData(dia)} · {d.horario ? textoHorario(d.horario, d.horarioTermino) : 'sem horário'}</div>
+                  </div>
+                  <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: dias <= 1 ? '#8C5F5C' : '#8C8478', whiteSpace: 'nowrap' }}>{rotuloDia(dias)}</span>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  {editandoTel === d.id || !tel ? (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input type="tel" inputMode="tel" placeholder="WhatsApp com DDD, ex.: 11 91234-5678" value={editandoTel === d.id ? telDigitado : ''} onFocus={() => { if (editandoTel !== d.id) { setEditandoTel(d.id); setTelDigitado(d.telefone || ''); } }} onChange={(e) => { setEditandoTel(d.id); setTelDigitado(e.target.value); }} className="focusable rounded px-3 py-2 text-sm" style={{ flex: 1, minWidth: 0, fontSize: 16 }} />
+                      <button type="button" onClick={() => salvarTel(d)} disabled={editandoTel !== d.id || !telDigitado.trim()} className="focusable mono text-xs font-semibold px-3 rounded" style={{ background: '#2B2724', color: '#FAF8F5', opacity: editandoTel === d.id && telDigitado.trim() ? 1 : 0.5 }}>Salvar</button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                      <span className="mono text-xs" style={{ color: '#8C8478' }}>{d.telefone}{' '}<button type="button" onClick={() => { setEditandoTel(d.id); setTelDigitado(d.telefone || ''); }} className="focusable underline">editar</button></span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {enviado && <button type="button" onClick={() => desmarcarEnviado(chave)} className="focusable mono" style={{ fontSize: 11, fontWeight: 700, color: '#4C7A5E' }} title="Toque para desmarcar">✓ Enviado</button>}
+                        <a href={link} target="_blank" rel="noopener noreferrer" onClick={() => marcarEnviado(chave)} className="focusable mono" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, padding: '9px 14px', borderRadius: 999, background: '#2B2724', color: '#FAF8F5', textDecoration: 'none' }}>
+                          <MessageCircle size={14} /> {enviado ? 'Enviar de novo' : 'Enviar lembrete'}
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function TelaAgenda({ demandas, financas, onAbrirAtendimento }) {
   const [mesAtual, setMesAtual] = useState(() => { const hoje = new Date(); return new Date(hoje.getFullYear(), hoje.getMonth(), 1); });
