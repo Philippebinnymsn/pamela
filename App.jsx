@@ -3101,6 +3101,7 @@ function expandirIntervalo(inicio, fim) {
 const emptyEvento = { titulo: '', cliente: '', tipo: 'gravacao', descricao: '', diaTodo: true, dataInicio: '', dataFim: '', horaInicio: '', horaFim: '', datasSelecionadas: [] };
 
 // ---------- Lembretes por WhatsApp ----------
+const ENDERECO_ESTUDIO = 'Rua Romualdo Lopes Cançado, 200, Castelo, Belo Horizonte MG';
 const TEXTO_LEMBRETE_PADRAO = `Oi, {cliente}! 💛
 Passando para lembrar do seu atendimento de {servico}:
 📅 {dia_semana}, {data}
@@ -3129,7 +3130,7 @@ function valoresLembrete(d, dataStr, financas) {
     dia_semana: dataStr ? DIAS_SEMANA_EXTENSO[new Date(dataStr + 'T00:00:00').getDay()] : '',
     horario: d.horario ? textoHorario(d.horario, d.horarioTermino) : '',
     horario_inicio: d.horario ? hhmm(d.horario) : '',
-    local: d.noEstudio ? 'No estúdio' : (d.endereco || ''),
+    local: d.noEstudio ? ENDERECO_ESTUDIO : (d.endereco || ''),
     valor_pendente: pendente > 0 ? moeda(pendente) : '',
   };
 }
