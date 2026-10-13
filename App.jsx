@@ -284,6 +284,9 @@ function mapGastoDoBanco(row) {
 
 const emptyDemanda = { telefone: '', cliente: '', projeto: '', etapa: 'Atendimento', prazo: '', horario: '', horarioTermino: '', status: 'pre_reserva', dataGravacao: null, datasGravacao: [], descricao: '', endereco: '', noEstudio: false, maisDeUmaPessoa: false, quantidadePessoas: 1, valorDeslocamento: '', extras: [], valor: '', temSinal: false, valorSinal: '', dataSinal: '', comNF: false, dataPagamento: '', parcelado: false, parcelas: [], contratoArquivo: null, contratoNome: '', removerContrato: false };
 const emptyFinanca = { cliente: '', projeto: '', valor: '', dataTrabalho: '', dataPagamento: '', pago: false, parcelado: false, parcelas: [] };
+// Gastos que não pertencem a um atendimento (compras de produtos e despesas gerais).
+const PROJETO_COMPRAS = 'Compra de produtos';
+const PROJETOS_GERAIS = [PROJETO_COMPRAS, 'Despesas gerais'];
 const emptyGasto = { projeto: '', cliente: '', descricao: '', valor: '', data: '' };
 
 const arred2 = (n) => Math.round(n * 100) / 100;
@@ -4327,6 +4330,9 @@ function TelaFinanceiro({ financas, gastos, demandas, onCriarLancamento, onAtual
 function TelaGastos({ gastos, financas, demandas, onCriar, onExcluir }) {
   const [formAberto, setFormAberto] = useState(false);
   const [form, setForm] = useState(emptyGasto);
+  const [compraAberta, setCompraAberta] = useState(false);
+  const [compra, setCompra] = useState({ descricao: '', valor: '', data: '' });
+  const [salvandoCompra, setSalvandoCompra] = useState(false);
 
   const projetosDisponiveis = useMemo(() => {
     const map = {};
@@ -4336,7 +4342,7 @@ function TelaGastos({ gastos, financas, demandas, onCriar, onExcluir }) {
   }, [financas, demandas]);
 
   const grupos = useMemo(() => {
-    const projetos = new Set([...financas.map((f) => f.projeto), ...gastos.map((g) => g.projeto)]);
+    const projetos = new Set([...financas.map((f) => f.projeto), ...gastos.map((g) => g.projeto)].filter((n) => !PROJETOS_GERAIS.includes(n)));
     return Array.from(projetos).map((projeto) => {
       const financasDoProjeto = financas.filter((f) => f.projeto === projeto);
       const cliente = financasDoProjeto[0]?.cliente || gastos.find((g) => g.projeto === projeto)?.cliente || '—';
@@ -4348,6 +4354,25 @@ function TelaGastos({ gastos, financas, demandas, onCriar, onExcluir }) {
       return { projeto, cliente, valorProjeto, valorLiquido, temNF, itens, totalGastos, lucro: valorLiquido - totalGastos };
     }).filter((g) => g.valorProjeto > 0 || g.itens.length > 0);
   }, [financas, gastos]);
+
+  const compras = useMemo(() => gastos.filter((g) => PROJETOS_GERAIS.includes(g.projeto)).sort((a, b) => String(b.data).localeCompare(String(a.data))), [gastos]);
+  const totalCompras = compras.reduce((t, g) => t + g.valor, 0);
+
+  function abrirCompra() {
+    setCompra({ descricao: '', valor: '', data: chaveHojeLocal() });
+    setCompraAberta(true);
+  }
+  async function salvarCompra(e) {
+    e.preventDefault();
+    if (!compra.descricao.trim() || !(Number(compra.valor) > 0) || !compra.data) return;
+    setSalvandoCompra(true);
+    try {
+      await onCriar({ projeto: PROJETO_COMPRAS, cliente: '', descricao: compra.descricao.trim(), valor: Number(compra.valor), data: compra.data });
+      setCompraAberta(false);
+    } finally {
+      setSalvandoCompra(false);
+    }
+  }
 
   async function adicionar(e) {
     e.preventDefault();
@@ -4366,13 +4391,46 @@ function TelaGastos({ gastos, financas, demandas, onCriar, onExcluir }) {
 
   return (
     <div>
-      <div className="flex justify-end mb-4">
+      <div className="flex justify-end flex-wrap gap-2 mb-4">
+        <button onClick={abrirCompra} className="focusable flex items-center gap-2 px-4 py-2 rounded mono text-sm font-semibold" style={{ background: 'transparent', color: '#8C5F5C', border: '1px solid #C39B99' }}>
+          <Plus size={16} /> Compra de produtos
+        </button>
         <button onClick={() => setFormAberto(true)} className="focusable flex items-center gap-2 px-4 py-2 rounded mono text-sm font-semibold" style={{ background: '#C39B99', color: '#2B2724' }}>
           <Plus size={16} /> Novo gasto
         </button>
       </div>
 
       <div className="flex flex-col gap-4">
+        {compras.length > 0 && (
+          <div className="card rounded-lg p-4 md:p-5">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div>
+                <div className="text-xs" style={{ color: '#8C8478' }}>Sem cliente · saem do caixa geral</div>
+                <h3 className="font-semibold text-base">Compras de produtos e despesas gerais</h3>
+              </div>
+              <div className="text-right">
+                <div className="mono text-[10px] tracking-widest" style={{ color: '#8C8478' }}>TOTAL</div>
+                <div className="mono text-sm font-semibold" style={{ color: '#B4483D' }}>{moeda(totalCompras)}</div>
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              {compras.map((item) => (
+                <div key={item.id} className="flex items-center justify-between gap-3 py-2" style={{ borderTop: '1px solid #EFEAE3' }}>
+                  <div className="min-w-0">
+                    <div className="text-sm" style={{ color: '#2B2724' }}>{item.descricao}</div>
+                    <div className="mono text-[11px]" style={{ color: '#8C8478' }}>{fmtData(item.data)}</div>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <span className="mono text-xs" style={{ color: '#8C8478' }}>{moeda(item.valor)}</span>
+                    <button onClick={() => excluirGasto(item)} className="focusable" title="Excluir" aria-label={`Excluir ${item.descricao}`} style={{ color: '#8C8478' }}>
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {grupos.map((g) => (
           <div key={g.projeto} className="card rounded-lg p-4 md:p-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
@@ -4427,6 +4485,23 @@ function TelaGastos({ gastos, financas, demandas, onCriar, onExcluir }) {
         ))}
         {grupos.length === 0 && <div className="card rounded-lg text-center py-12 mono text-sm" style={{ color: '#8C8478' }}>Nenhum projeto com dados financeiros ainda.</div>}
       </div>
+
+      {compraAberta && (
+        <div className="fixed inset-0 flex items-start justify-center p-4 overflow-y-auto py-8 overlay-modal" style={{ background: 'rgba(0,0,0,0.6)' }}>
+          <form onSubmit={salvarCompra} className="card rounded-lg my-auto p-6 w-full max-w-sm">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="mono text-sm tracking-widest" style={{ color: '#8C8478' }}>COMPRA DE PRODUTOS</h2>
+              <button type="button" onClick={() => setCompraAberta(false)} className="focusable" aria-label="Fechar"><X size={18} color="#8C8478" /></button>
+            </div>
+            <div className="flex flex-col gap-3">
+              <input required autoFocus placeholder="Descrição (ex: laquê, escovas, toucas)" value={compra.descricao} onChange={(e) => setCompra({ ...compra, descricao: e.target.value })} className="focusable rounded px-3 py-2 text-sm" />
+              <input required type="number" inputMode="decimal" step="0.01" min="0.01" placeholder="Valor gasto (R$)" value={compra.valor} onChange={(e) => setCompra({ ...compra, valor: e.target.value })} className="focusable rounded px-3 py-2 text-sm" />
+              <input required type="date" value={compra.data} onChange={(e) => setCompra({ ...compra, data: e.target.value })} className="focusable rounded px-3 py-2 text-sm" />
+              <button type="submit" disabled={salvandoCompra} className="focusable mono text-sm font-semibold rounded py-2 mt-1" style={{ background: '#C39B99', color: '#2B2724', opacity: salvandoCompra ? 0.6 : 1 }}>{salvandoCompra ? 'Salvando…' : 'Adicionar compra'}</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {formAberto && (
         <div className="fixed inset-0 flex items-start justify-center p-4 overflow-y-auto py-8 overlay-modal" style={{ background: 'rgba(0,0,0,0.6)' }}>
