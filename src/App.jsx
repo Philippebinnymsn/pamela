@@ -3197,6 +3197,8 @@ function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvar
   const [aviso, setAviso] = useState('');
   const [filtro, setFiltro] = useState('amanha');
   const [editandoTel, setEditandoTel] = useState(null);
+  const [expandidos, setExpandidos] = useState([]);
+  const alternarExpandido = (chave) => setExpandidos((prev) => (prev.includes(chave) ? prev.filter((c) => c !== chave) : [...prev, chave]));
   const [telDigitado, setTelDigitado] = useState('');
   const areaRef = useRef(null);
 
@@ -3264,6 +3266,8 @@ function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvar
             const enviado = enviados.includes(chave);
             const msg = montarMensagemLembrete(texto, d, dia, financas);
             const link = tel ? `https://wa.me/${tel}?text=${encodeURIComponent(msg)}` : undefined;
+            const aberto = expandidos.includes(chave);
+            const faltas = [!d.cliente && 'nome', !d.projeto && 'serviço', !d.horario && 'horário', !d.noEstudio && !d.endereco && 'endereço', !tel && 'WhatsApp'].filter(Boolean);
             return (
               <div key={chave} style={{ border: '1px solid #EFEAE3', borderRadius: 12, padding: 12, background: enviado ? '#F4F8F4' : '#fff' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
@@ -3271,8 +3275,35 @@ function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvar
                     <div style={{ fontWeight: 700, fontSize: 15 }}>{d.cliente}</div>
                     <div className="text-xs" style={{ color: '#8C8478' }}>{d.projeto} · {fmtData(dia)} · {d.horario ? textoHorario(d.horario, d.horarioTermino) : 'sem horário'}</div>
                   </div>
-                  <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: dias <= 1 ? '#8C5F5C' : '#8C8478', whiteSpace: 'nowrap' }}>{rotuloDia(dias)}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: dias <= 1 ? '#8C5F5C' : '#8C8478', whiteSpace: 'nowrap' }}>{rotuloDia(dias)}</span>
+                    {faltas.length > 0 && <AlertTriangle size={14} style={{ color: '#B7791F' }} aria-label="Dados incompletos" />}
+                    <button type="button" onClick={() => alternarExpandido(chave)} aria-expanded={aberto} aria-label={aberto ? 'Recolher conferência' : 'Expandir para conferir'} className="focusable" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 999, border: '1px solid #E8E3DC', background: '#fff', color: '#8C8478' }}>
+                      <ChevronDown size={16} style={{ transform: aberto ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
+                    </button>
+                  </div>
                 </div>
+                {aberto && (
+                  <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: '#FAF8F5', border: '1px solid #EFEAE3', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div className="mono text-xs tracking-widest" style={{ color: '#8C8478' }}>CONFERIR ANTES DE ENVIAR</div>
+                    {[
+                      ['Nome', d.cliente],
+                      ['Serviço', d.projeto],
+                      ['Data', fmtData(dia)],
+                      ['Horário', d.horario ? textoHorario(d.horario, d.horarioTermino) : ''],
+                      ['Endereço', d.noEstudio ? 'No estúdio — ' + ENDERECO_ESTUDIO : (d.endereco || '')],
+                      ['WhatsApp', d.telefone || ''],
+                    ].map(([rot, val]) => (
+                      <div key={rot} style={{ display: 'flex', gap: 8, fontSize: 13, lineHeight: 1.35 }}>
+                        <span className="mono" style={{ minWidth: 68, fontSize: 11, fontWeight: 700, color: '#8C8478' }}>{rot}</span>
+                        {val ? <span style={{ wordBreak: 'break-word' }}>{val}</span> : <span style={{ color: '#B7791F', fontWeight: 600 }}>⚠ não preenchido</span>}
+                      </div>
+                    ))}
+                    {faltas.length > 0 && <p className="text-xs" style={{ color: '#B7791F', margin: 0 }}>Complete os dados em Agenda (editar o agendamento) antes de enviar; linhas sem dado ficam fora da mensagem.</p>}
+                    <div className="mono text-xs tracking-widest" style={{ color: '#8C8478', marginTop: 4 }}>MENSAGEM</div>
+                    <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, background: '#fff', border: '1px solid #EFEAE3', borderRadius: 8, padding: 8 }}>{msg || '—'}</div>
+                  </div>
+                )}
                 <div style={{ marginTop: 10 }}>
                   {editandoTel === d.id || !tel ? (
                     <div style={{ display: 'flex', gap: 6 }}>
