@@ -67,7 +67,7 @@ const CSS_IPHONE = `
         input[type=date], input[type=time] { min-width: 0; max-width: 100%; min-height: 42px; }
         .app-shell { padding-bottom: max(2rem, env(safe-area-inset-bottom)); }
         @media (max-width: 767px) { .app-shell { padding-left: max(1.25rem, env(safe-area-inset-left)); padding-right: max(1.25rem, env(safe-area-inset-right)); } }
-        .overlay-modal { overscroll-behavior: contain; padding-bottom: max(2rem, env(safe-area-inset-bottom)); }
+        .overlay-modal { z-index: 50; overscroll-behavior: contain; padding-bottom: max(2rem, env(safe-area-inset-bottom)); }
         .viewer { height: min(94vh, 900px); height: min(94dvh, 900px); }
         .extra-row { display: grid; gap: 6px; align-items: center; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
         .extra-row .tipo { grid-column: 1 / 3; grid-row: 1; }
@@ -1664,7 +1664,7 @@ export default function App() {
       </div>
 
       <TelaDemandas somenteModais={aba !== 'demandas'} pedidoAbrir={pedidoAbrir} demandas={demandas} financas={financas} gastos={gastos} onCriar={criarDemanda} onAtualizar={atualizarDemanda} onExcluir={excluirDemanda} onAlternarConcluido={alternarServicoConcluido} />
-      {aba === 'lembretes' && <TelaLembretes demandas={demandas} financas={financas} textoSalvo={textoLembrete} onSalvarTexto={salvarTextoLembrete} onSalvarTelefone={salvarTelefone} enviados={lembretesEnviados} onMarcarEnviado={marcarLembreteEnviado} />}
+      {aba === 'lembretes' && <TelaLembretes demandas={demandas} financas={financas} textoSalvo={textoLembrete} onSalvarTexto={salvarTextoLembrete} onSalvarTelefone={salvarTelefone} enviados={lembretesEnviados} onMarcarEnviado={marcarLembreteEnviado} onEditarAtendimento={(id) => setPedidoAbrir({ id, editar: true, ts: Date.now() })} />}
       {aba === 'agenda' && <TelaAgenda demandas={demandas} financas={financas} onAbrirAtendimento={(id) => setPedidoAbrir({ id, ts: Date.now() })} />}
       {aba === 'financeiro' && <TelaFinanceiro financas={financas} gastos={gastos} demandas={demandas} onCriarLancamento={criarLancamento} onAtualizarLancamento={atualizarLancamento} onAtualizarStatus={atualizarStatusPagamento} onExcluirLancamento={excluirLancamento} onCriarGasto={criarGasto} onExcluirGasto={excluirGasto} />}
     </div>
@@ -2576,7 +2576,10 @@ function TelaDemandas({ demandas, financas, gastos, onCriar, onAtualizar, onExcl
 
   // Pedido vindo de outra aba (ex.: clique num serviço da Agenda) abre o card em popup.
   useEffect(() => {
-    if (pedidoAbrir && pedidoAbrir.id != null) setDetalheId(pedidoAbrir.id);
+    if (!pedidoAbrir || pedidoAbrir.id == null) return;
+    const alvo = pedidoAbrir.editar ? demandas.find((x) => x.id === pedidoAbrir.id) : null;
+    if (alvo) abrirEdicao(alvo);
+    else setDetalheId(pedidoAbrir.id);
   }, [pedidoAbrir]);
 
   const semAcento = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -3192,11 +3195,13 @@ function telefoneParaWhatsapp(t) {
   return n;
 }
 
-function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvarTelefone, enviados, onMarcarEnviado }) {
+function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvarTelefone, enviados, onMarcarEnviado, onEditarAtendimento }) {
   const [texto, setTexto] = useState(textoSalvo || TEXTO_LEMBRETE_PADRAO);
   const [aviso, setAviso] = useState('');
   const [filtro, setFiltro] = useState('amanha');
   const [editandoTel, setEditandoTel] = useState(null);
+  const [expandidos, setExpandidos] = useState([]);
+  const alternarExpandido = (chave) => setExpandidos((prev) => (prev.includes(chave) ? prev.filter((c) => c !== chave) : [...prev, chave]));
   const [telDigitado, setTelDigitado] = useState('');
   const areaRef = useRef(null);
 
@@ -3264,6 +3269,8 @@ function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvar
             const enviado = enviados.includes(chave);
             const msg = montarMensagemLembrete(texto, d, dia, financas);
             const link = tel ? `https://wa.me/${tel}?text=${encodeURIComponent(msg)}` : undefined;
+            const aberto = expandidos.includes(chave);
+            const faltas = [!d.cliente && 'nome', !d.projeto && 'serviço', !d.horario && 'horário', !d.noEstudio && !d.endereco && 'endereço', !tel && 'WhatsApp'].filter(Boolean);
             return (
               <div key={chave} style={{ border: '1px solid #EFEAE3', borderRadius: 12, padding: 12, background: enviado ? '#F4F8F4' : '#fff' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
@@ -3271,8 +3278,38 @@ function TelaLembretes({ demandas, financas, textoSalvo, onSalvarTexto, onSalvar
                     <div style={{ fontWeight: 700, fontSize: 15 }}>{d.cliente}</div>
                     <div className="text-xs" style={{ color: '#8C8478' }}>{d.projeto} · {fmtData(dia)} · {d.horario ? textoHorario(d.horario, d.horarioTermino) : 'sem horário'}</div>
                   </div>
-                  <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: dias <= 1 ? '#8C5F5C' : '#8C8478', whiteSpace: 'nowrap' }}>{rotuloDia(dias)}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span className="mono" style={{ fontSize: 11, fontWeight: 700, color: dias <= 1 ? '#8C5F5C' : '#8C8478', whiteSpace: 'nowrap' }}>{rotuloDia(dias)}</span>
+                    {faltas.length > 0 && <AlertTriangle size={14} style={{ color: '#B7791F' }} aria-label="Dados incompletos" />}
+                    <button type="button" onClick={() => alternarExpandido(chave)} aria-expanded={aberto} aria-label={aberto ? 'Recolher conferência' : 'Expandir para conferir'} className="focusable" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 999, border: '1px solid #E8E3DC', background: '#fff', color: '#8C8478' }}>
+                      <ChevronDown size={16} style={{ transform: aberto ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
+                    </button>
+                  </div>
                 </div>
+                {aberto && (
+                  <div style={{ marginTop: 10, padding: 10, borderRadius: 10, background: '#FAF8F5', border: '1px solid #EFEAE3', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div className="mono text-xs tracking-widest" style={{ color: '#8C8478' }}>CONFERIR ANTES DE ENVIAR</div>
+                    {[
+                      ['Nome', d.cliente],
+                      ['Serviço', d.projeto],
+                      ['Data', fmtData(dia)],
+                      ['Horário', d.horario ? textoHorario(d.horario, d.horarioTermino) : ''],
+                      ['Endereço', d.noEstudio ? 'No estúdio — ' + ENDERECO_ESTUDIO : (d.endereco || '')],
+                      ['WhatsApp', d.telefone || ''],
+                    ].map(([rot, val]) => (
+                      <div key={rot} style={{ display: 'flex', gap: 8, fontSize: 13, lineHeight: 1.35 }}>
+                        <span className="mono" style={{ minWidth: 68, fontSize: 11, fontWeight: 700, color: '#8C8478' }}>{rot}</span>
+                        {val ? <span style={{ wordBreak: 'break-word' }}>{val}</span> : <span style={{ color: '#B7791F', fontWeight: 600 }}>⚠ não preenchido</span>}
+                      </div>
+                    ))}
+                    {faltas.length > 0 && <p className="text-xs" style={{ color: '#B7791F', margin: 0 }}>Complete os dados antes de enviar; linhas sem dado ficam fora da mensagem.</p>}
+                    <button type="button" onClick={() => onEditarAtendimento(d.id)} className="focusable mono" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, alignSelf: 'flex-start', fontSize: 12, fontWeight: 700, padding: '8px 14px', borderRadius: 999, border: '1px solid #2B2724', background: '#fff', color: '#2B2724' }}>
+                      <Pencil size={13} /> Editar atendimento
+                    </button>
+                    <div className="mono text-xs tracking-widest" style={{ color: '#8C8478', marginTop: 4 }}>MENSAGEM</div>
+                    <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, background: '#fff', border: '1px solid #EFEAE3', borderRadius: 8, padding: 8 }}>{msg || '—'}</div>
+                  </div>
+                )}
                 <div style={{ marginTop: 10 }}>
                   {editandoTel === d.id || !tel ? (
                     <div style={{ display: 'flex', gap: 6 }}>
